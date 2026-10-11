@@ -2,12 +2,11 @@
   <img src="icon.svg" alt="dsh-workbuddy-bridge" width="80" height="80">
 </p>
 
-<p align="center">
-  <h1 align="center">dsh-workbuddy-bridge</h1>
-</p>
+<h1 align="center">dsh-workbuddy-bridge</h1>
 
 <div align="center">
   <p><strong>WorkBuddy desktop models in DeepSeek Harness</strong></p>
+  <p><em>把 WorkBuddy 桌面 App 的模型接进 DSH 对话窗口</em></p>
 
   <p>
     <a href="https://www.npmjs.com/package/dsh-workbuddy-bridge"><img src="https://img.shields.io/npm/v/dsh-workbuddy-bridge?style=flat" alt="npm"></a>
@@ -29,8 +28,7 @@
 
 > [!NOTE]
 > **Credentials never leave this machine**: sign-in state is read from the WorkBuddy desktop app's own
-> credential file and kept as one encrypted local copy; the browser half never sees a token, and none
-> ever appears in the UI.
+> credential file and kept as one encrypted local copy; the browser half never sees a token, and none ever appears in the UI.
 
 The CN **WorkBuddy** and the international **WorkBuddy AI** coexist: install one app and its model group
 appears; install both and the two groups sit side by side, each with its own account and credit. The
@@ -49,10 +47,10 @@ models appear directly in the DSH model picker — no separate provider to confi
 - **Two isolated versions** — "WorkBuddy" (CN) and "WorkBuddy AI" (international) each form their own group;
   models, accounts and credit never mix, and each follows only its own app's sign-in.
 - **Reasoning levels** — models that declare levels expose them directly; the rest can be **checked manually**
-  on the plugin page. The bulb means "this model can switch levels", not "it has been detected" — a declared
-  model shows the bulb too, it just has nothing to detect.
+  on the plugin page. The bulb means "this model can switch levels"; a declared model shows it too, it just
+  has nothing to detect.
 - **Credit in view** — each reply shows what it consumed, and remaining credit sits beside the model picker.
-  Nothing renders when a figure cannot be observed.
+  Nothing renders when a figure is unavailable.
 - **Model visibility** — tick which models appear in the picker on the card's "Models" tab, saved per
   signed-in account.
 - **Image input** — most models accept pasted or dropped images; text-only models say so explicitly.
@@ -81,8 +79,8 @@ dsh plugin --profile web add dsh-workbuddy-bridge
 dsh web
 ```
 
-For Desktop and TUI swap `--profile web` for `desktop` / `dsh-tui` (the TUI needs the terminal plugin
-`@deepseek-harness-tui/dsh-tui` ≥ `0.10.0-beta.5` — see its docs).
+For Desktop and TUI swap `--profile web` for `desktop` / `dsh-tui` (the TUI needs a recent version of
+the terminal plugin `@deepseek-harness-tui/dsh-tui` — see its docs).
 
 Or from source:
 
@@ -93,7 +91,7 @@ pnpm install && pnpm build
 dsh plugin --profile web add "$PWD"
 ```
 
-⚠️ The `pnpm install` above is not optional: under the `link:` form the repository supplies
+⚠️ The `pnpm install` above is not optional: under a path install the repository has to supply
 its own dependencies (see [local development setup](docs/PUBLISHING.md)) — skip it and the
 plugin shows as "not running" (`ERR_MODULE_NOT_FOUND`).
 
@@ -121,7 +119,7 @@ the description and takes effect on save:
 
 ## Why detection is manual
 
-The upstream does not guarantee that level information is reliable — some models were observed to
+The WorkBuddy API does not guarantee that level information is reliable — some models were observed to
 **accept** `reasoning_effort` while silently ignoring unknown values. So the plugin does not guess: it
 confirms one model at a time with a few real requests on demand, and a result only means **the upstream
 currently accepts that level** — it does not promise any change in behaviour. Models that declare their
@@ -136,8 +134,8 @@ Mechanism and trade-offs in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Compatibility and limits
 
-A group without credentials does not appear. The host version floor, platform support, catalog sources and
-known gaps
+A group without credentials does not appear. The host version floor, platform support, where the model
+catalog comes from and known gaps
 → [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md).
 
 Design notes → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); release process → [docs/PUBLISHING.md](docs/PUBLISHING.md);
@@ -146,7 +144,7 @@ maintainer map → [AGENTS.md](AGENTS.md).
 ## Disclaimer
 
 - This project is **for personal study and research only**; it drives your own WorkBuddy account on your own
-  machine. Do not use it commercially or beyond reasonable personal use.
+  machine. Do not use it commercially.
 - You must comply with WorkBuddy's terms of service; any consequences are your own responsibility.
 - Not affiliated with, nor endorsed by, Tencent, WorkBuddy, or DeepSeek; names appear only to describe
   compatibility, and trademarks belong to their owners.

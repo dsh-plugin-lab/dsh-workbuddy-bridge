@@ -2,9 +2,7 @@
   <img src="icon.svg" alt="dsh-workbuddy-bridge" width="80" height="80">
 </p>
 
-<p align="center">
-  <h1 align="center">dsh-workbuddy-bridge</h1>
-</p>
+<h1 align="center">dsh-workbuddy-bridge</h1>
 
 <div align="center">
   <p><strong>把 WorkBuddy 桌面 App 的模型接进 DSH 对话窗口</strong></p>
@@ -46,8 +44,8 @@
 - **开箱即用** —— 装完启用，模型分组自己出现。
 - **两版隔离** —— 国内版与国际版各自分组，模型、账号、积分互不混用，只跟随各自 App 的登录状态。
 - **推理档位** —— 上游声明了档位的模型直接可选；没声明的可在插件页**手动检测**。
-  灯泡表示「这个模型能切档位」，不是「检测过」——已声明的模型也显示灯泡，只是不需要检测。
-- **积分可见** —— 每条回复下方显示本次消耗，模型选择器旁常驻剩余积分。观测不到就不显示。
+  灯泡表示能切档位；上游已声明的模型也亮着，只是不需要检测。
+- **积分可见** —— 每条回复下方显示本次消耗，模型选择器旁常驻剩余积分。拿不到数字时不显示。
 - **模型显隐** —— 卡片「模型」标签里勾选哪些模型出现在选择器里，按登录账号分别保存。
 - **图片输入** —— 多数模型可直接粘贴或拖入图片；纯文字模型会明确说明。
 - **三种界面** —— Web / Desktop / TUI；仅 TUI 无手动检测。
@@ -73,8 +71,8 @@ dsh plugin --profile web add dsh-workbuddy-bridge
 dsh web
 ```
 
-Desktop 与 TUI 把 `--profile web` 换成 `desktop` / `dsh-tui`（TUI 需终端插件
-`@deepseek-harness-tui/dsh-tui` ≥ `0.10.0-beta.5`，详见其文档）。
+Desktop 与 TUI 把 `--profile web` 换成 `desktop` / `dsh-tui`（TUI 需较新版本的终端插件
+`@deepseek-harness-tui/dsh-tui`，版本要求见其文档）。
 
 也可以从源码安装：
 
@@ -85,7 +83,7 @@ pnpm install && pnpm build
 dsh plugin --profile web add "$PWD"
 ```
 
-⚠️ 上面那步 `pnpm install` 不能省：`link:` 装法下依赖由仓库自己提供（见[本地开发装法](docs/PUBLISHING.md)），
+⚠️ 上面那步 `pnpm install` 不能省：按路径挂载时依赖要由仓库自己装好（见[本地开发装法](docs/PUBLISHING.md)），
 漏装则插件显示「未运行」（`ERR_MODULE_NOT_FOUND`）。
 
 ## 插件页
@@ -110,7 +108,7 @@ dsh plugin --profile web add "$PWD"
 
 ## 为什么是手动检测
 
-上游不保证档位信息可靠——实测有的模型**接受** `reasoning_effort` 却忽略未知值。
+WorkBuddy 接口不保证档位信息可靠——有的模型**接受** `reasoning_effort` 却忽略未知值。
 所以插件不猜：按需对单个模型发少量真实请求确认；结果只表示**上游当前接受该档位**，
 不承诺它改变推理行为。已声明档位的模型跳过这一步，直接用声明值。
 机制与取舍见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
@@ -123,7 +121,7 @@ dsh plugin --profile web add "$PWD"
 
 ## 兼容与限制
 
-无凭据的分组不显示。宿主版本下限、平台支持、目录来源与已知缺口
+无凭据的分组不显示。宿主版本下限、平台支持、模型清单从哪来与已知缺口
 → [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
 
 设计取舍 → [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)；发版流程 → [docs/PUBLISHING.md](docs/PUBLISHING.md)；
@@ -131,7 +129,7 @@ dsh plugin --profile web add "$PWD"
 
 ## 免责声明
 
-- 本项目**仅供个人学习和研究使用**，仅驱动使用者自己的 WorkBuddy 账号在本机调用，请勿用于商业用途或超出个人合理使用的场景。
+- 本项目**仅供个人学习和研究使用**，仅驱动使用者自己的 WorkBuddy 账号在本机调用，请勿用于商业用途。
 - 使用者需遵守 WorkBuddy 的服务条款；因使用本项目产生的任何后果，由使用者自行承担。
 - 本项目与腾讯、WorkBuddy、DeepSeek 均无关联，未获其授权或认可；文中出现的名称仅用于描述兼容关系，其商标权利归各自所有。
 
