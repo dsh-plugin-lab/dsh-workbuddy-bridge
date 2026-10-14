@@ -16,6 +16,10 @@
 #
 # 幂等：重跑不会重复发布 —— 目标版本已在 npm 上时跳过 publish，只补齐 git 侧（tag / Release）。
 #
+# **发版说明读 Release Drafter 草稿**（tag `next`），读不到或读空才回落 `--generate-notes`，
+# 且**读不到必须发 warning** —— 那是配置坏了，与「本轮没有带标签的 PR」不是一回事。
+# 正文取走之后**删掉草稿**，否则下一版会读到这一批的正文。
+#
 # **版本驱动：本 workflow 不 bump 版本。** 发布的就是 package.json 里那个号 ——
 # 版本号是发布**之前**的独立一步（bump → 提交 → 再拍截图 → 最后发布），
 # 界面上的版本号就是 package.json 里那个号，workflow 自己 bump 会让截图必然拍出旧号。
@@ -179,7 +183,40 @@ jobs:
             pnpm publish --provenance --access public --no-git-checks
           fi
 
-      - name: Create the tag and the GitHub Release
+      # 正文来源两级：**草稿 → `--generate-notes` 回落**。
+      #
+      # 草稿由 Release Drafter 维护（配置在组织仓，本仓没有自带那份），tag 是滚动名 `next`，
+      # 永不与 `v<版本>` 相撞 —— 所以上面 `gh release view "$tag"` 那道存在性判断不会命中草稿。
+      #
+      # **必须断言「草稿真的被读到了吗」**：读不到草稿与「草稿为空」都会走回落，
+      # 但前者是**配置坏了**（tag 改名、action 没跑、权限不足），后者是**正常情况**。
+      # 不区分的话，「发版成功但正文其实走了回落」是静默失败。
+      #
+      # 清理只按 action 名匹配（`/Release Drafter/d`）而**不抄那句提示语的全文**：
+      # 那句话归组织仓的模板所有，随时会被改写；照抄一句会变成一条静默失效的 sed。
+      - name: Pick the release body (draft first, then --generate-notes)
+        id: notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          draft="$(gh release view next --json body --jq '.body' 2>/dev/null || true)"
+          if printf '%s' "$draft" | grep -q 'Release Drafter'; then
+            printf '%s\n' "$draft" | sed '/Release Drafter/d' > /tmp/notes.md
+            # 草稿可能只有标题没有条目（本轮没有带标签的 PR）：那种仍算「读到但为空」，走回落。
+            if [ -n "$(grep -E '^[-*] ' /tmp/notes.md || true)" ]; then
+              echo "source=draft" >> "$GITHUB_OUTPUT"
+              echo "::notice::正文来自 Release Drafter 草稿（next）"
+            else
+              echo "source=generate" >> "$GITHUB_OUTPUT"
+              echo "::notice::草稿读到了但没有条目（本版没有带标签的 PR），回落 --generate-notes"
+            fi
+          else
+            echo "source=generate" >> "$GITHUB_OUTPUT"
+            echo "::warning::读不到 Release Drafter 草稿（next）—— 回落 --generate-notes。"
+            echo "::warning::若是配置坏了（tag 改名 / action 没跑 / 权限不足），这条 warning 就是唯一的信号。"
+          fi
+
+      - name: Create the GitHub Release
         if: steps.check.outputs.published == 'false' || steps.check.outputs.published == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -201,12 +238,38 @@ jobs:
           # tag 已存在时不能传 --target（GitHub 会拒），所以按「本地有没有这个 tag」分两路。
           # API 偶发 5xx：^HTTP 5 重试三次，避免一次瞬时故障把整条发布链判死（2026-09-26 实踩过一次 HTTP 500，
           # 当时 npm 侧已经发成功，只有 Release 没建出来 —— 重跑 workflow 即可自愈，但先重试更省事）。
-          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
-            gh release create "$tag" --title "$tag" --generate-notes $extra
+          if [ "${{ steps.notes.outputs.source }}" = "draft" ]; then
+            create="gh release create \"$tag\" --title \"$tag\" $extra --notes-file /tmp/notes.md"
+          elif git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            create="gh release create \"$tag\" --title \"$tag\" $extra --generate-notes"
           else
-            gh release create "$tag" --target "$(git rev-parse HEAD)" --title "$tag" --generate-notes $extra
-          fi || {
+            create="gh release create \"$tag\" --target \"$(git rev-parse HEAD)\" --title \"$tag\" $extra --generate-notes"
+          fi
+          if ! eval "$create"; then
             echo "第一次建 Release 失败，等 10 秒重试……"
             sleep 10
-            gh release create "$tag" --title "$tag" --generate-notes $extra
-          }
+            eval "$create"
+          fi
+
+      # 正文取走之后**必须把草稿让位**，否则下一次发版会读到上一批的正文。
+      #
+      # Release Drafter 以「最新的正式版」作分界线，它自己不认哪个草稿被消费过。
+      # 不删的后果不是「草稿空白」，而是**草稿停在旧分界**（实测：0.3.0 发版后 `next` 的正文
+      # 仍停在 0.3.0 之前那一批）—— 正文是**上一批的**，而表面上看草稿「有内容」，属静默错。
+      #
+      # ⚠️ **`if` 必须与上面 `Create` 那条一致**：只有正文真的取自草稿才删 ——
+      # 走了回落就不该动它（草稿还在，且这批正文本来就不在它里面）。
+      #
+      # 只删 tag 不以 `v` 开头的那一个草稿：不按标题匹配，也不碰任何 `v<版本>` 的正式版
+      # （`gh release delete <tag>` 默认连带删 tag，这里显式关掉）。
+      - name: Retire the drafter's next draft
+        if: steps.check.outputs.published == 'false' && steps.notes.outputs.source == 'draft'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          draft_tag="$(gh release list --limit 30 --json tagName,isDraft \
+            --jq '[.[] | select(.isDraft) | .tagName] | map(select(startswith("v") | not)) | .[0] // ""')"
+          if [ -n "$draft_tag" ]; then
+            gh release delete "$draft_tag" --yes --cleanup-tag=false
+            echo "已删除草稿 $draft_tag（下一批合并后 Release Drafter 会重建它）"
+          fi

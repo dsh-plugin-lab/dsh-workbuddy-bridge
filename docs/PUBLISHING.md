@@ -35,14 +35,29 @@
 
 - **推 tag**：`git push origin v<版本>` —— 打 tag 就走。带一道自己的闸：**tag 名必须等于 `v` + `package.json` 里的版本号**，不一致直接红（否则会出现「tag 是 v0.3.0、发出去的是 0.2.0」，而 npm 的版本号不可覆盖）。
 - **手动触发**：Actions → Release → Run workflow（或 `gh workflow run release.yml`）。只接受从 main 触发；tag 由流程补建。
+  - 那道「只接受 main」的判定**必须带 `github.event_name` 守卫**：不带的话 tag 触发时
+    `github.ref` 是 `refs/tags/...`，每一次 tag 发布都红。
 
 - **版本驱动**：workflow 只发 `package.json` 里那个号，**它不 bump**。bump 是发布前的本地一步：
   `pnpm version <patch|minor|major> --no-git-tag-version` → 重建 `lib/` → 提交（**只提交源码与 `package.json`，
   `lib/` 不入库**）→ （渲染面改动先重截图）→ 推 main → 打 tag。
 - **dist-tag 由版本自己推**：带预发布段（如 `0.3.0-alpha.1`）发到同名 dist-tag（`alpha`），`latest` 不动；稳定版发 `latest`。
+- **发版说明读 Release Drafter 草稿**（tag `next`，配置在组织仓，本仓不自带）：
+  - 草稿里有条目 → 正文用它（`--notes-file`）；删掉草稿末尾那句「未发布」标记 —— 它在正式 Release 里是错的。
+  - 草稿读到了但没有条目（本轮没有带标签的 PR）→ 回落 `--generate-notes`，发 `notice`。
+  - **草稿读不到** → 回落 `--generate-notes`，发 **`warning`**。这一档与上一档不是一回事：
+    上一档是正常情况，这一档是**配置坏了**（tag 改名、action 没跑、权限不足）。不分开的话，
+    「发版成功但正文其实走了回落」与「一切正常」长得一模一样。
+  - 正文取走之后**删掉草稿**（只删 tag 不以 `v` 开头的那一个，`--cleanup-tag=false` 免得连带删掉 tag）。
+    不删的后果不是「草稿空白」而是**草稿停在旧分界**：下一版读到的是上一批的正文，
+    而草稿看上去「有内容」。
+  - 形状由 [tests/redlines.spec.ts](../tests/redlines.spec.ts) 钉住（含反向控制）。
 - **守卫**：上个 tag 以来只有文档 / 测试 / CI / 工具脚本改动时红（[scripts/release-guard.mjs](../scripts/release-guard.mjs)）；
   首次发布没有历史 tag，守卫自动跳过。确需越过用 force 输入（手动触发才有）。
+  - **tag 触发时基线要排除正在发的那个 tag**：此时 HEAD 就是被 tag 的提交，不排除的话
+    `<tag>..HEAD` 恒空，一次完全正常的发布会被判成「没有可发布的内容」（2026-09-26 实踩）。
 - **幂等**：版本已在 npm 上时跳过 publish、只补齐 git 侧 —— 「忘了 bump」的症状就是它报已存在。
+  建 Release 之前先判存在，否则重跑撞 tag 已存在而红。
 - **前置（一次性，人工配置）**：npmjs.com 上为本包配 **Trusted Publisher**——
   registry 指向 `registry.npmjs.org`，GitHub 仓库名 / workflow 文件名（`release.yml`）/ environment 名（`release`）三处一致。
 - **改了 release.yml 必须实跑一次**：PR 上的 CI 只跑 ci.yml，绿勾不代表发布链路验过。
