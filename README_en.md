@@ -41,7 +41,7 @@ models appear directly in the DSH model picker — no separate provider to confi
 <p align="center">
   <img src="assets/model-picker.png" alt="WorkBuddy models in the DSH model picker" width="300">
   <br>
-  <em>The CN version forms its own group in the model picker, each model carrying its credit rate and promo
+  <em>Chinese UI screenshot: The CN version forms its own group in the model picker, each model carrying its credit rate and promo
   badge; installing the international version adds a "WorkBuddy AI" group the same way.</em>
 </p>
 
@@ -64,14 +64,14 @@ models appear directly in the DSH model picker — no separate provider to confi
 <p align="center">
   <img src="assets/composer-row.png" alt="The composer row: the coin and balance, the reasoning-level bulb and the model name in one line" width="560">
   <br>
-  <em>The everyday view in the conversation window: the coin and its balance, the reasoning-level bulb, then the
+  <em>Chinese UI screenshot: The everyday view in the conversation window: the coin and its balance, the reasoning-level bulb, then the
   model name — one row, left to right.</em>
 </p>
 
 <p align="center">
   <img src="assets/plugin-page.png" alt="Plugin detail page: the configuration form and the two status cards" width="480">
   <br>
-  <em>The plugin page: the configuration form on top, two cards below, each following its own app's sign-in.</em>
+  <em>Chinese UI screenshot: The plugin page: the configuration form on top, two cards below, each following its own app's sign-in.</em>
 </p>
 
 ## Install
@@ -111,14 +111,14 @@ the description and takes effect on save:
 <p align="center">
   <img src="assets/models-tab.png" alt="Models tab: visibility, windows, rates" width="480">
   <br>
-  <em>The Models tab: tick which models appear in the picker, and read each one's window and rate.</em>
+  <em>Chinese UI screenshot: The Models tab: tick which models appear in the picker, and read each one's window and rate.</em>
 </p>
 
 <p align="center">
   <img src="assets/detection-tab.png" alt="Detection tab: one row per reasoning model" width="300">
   <img src="assets/credits-tab.png" alt="Credits tab: the total balance and per-package allowances" width="300">
   <br>
-  <em>Left, "Detection": one row per reasoning model — press the button to confirm which reasoning levels it
+  <em>Chinese UI screenshots: Left, "Detection": one row per reasoning model — press the button to confirm which reasoning levels it
   accepts. Right, "Credits": the total balance, each package's allowance as a row below.</em>
 </p>
 
@@ -134,7 +134,7 @@ Mechanism and trade-offs in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 <p align="center">
   <img src="assets/reasoning-levels-declared.png" alt="The reasoning-level control: levels declared upstream, detect disabled" width="300">
   <br>
-  <em>A model with declared levels: the bulb is lit, the levels are directly selectable, and detection is disabled.</em>
+  <em>Chinese UI screenshot: A model with declared levels: the bulb is lit, the levels are directly selectable, and detection is disabled.</em>
 </p>
 
 ## Compatibility and limits

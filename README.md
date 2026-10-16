@@ -40,7 +40,7 @@
 <p align="center">
   <img src="assets/model-picker.png" alt="WorkBuddy 模型出现在 DSH 模型选择器中" width="300">
   <br>
-  <em>国内版在模型选择器中自成一组，模型名后直接跟积分倍率与促销徽章；装国际版则出现「WorkBuddy AI」组。</em>
+  <em>中文界面截图：国内版在模型选择器中自成一组，模型名后直接跟积分倍率与促销徽章；装国际版则出现「WorkBuddy AI」组。</em>
 </p>
 
 ## 能力
@@ -59,13 +59,13 @@
 <p align="center">
   <img src="assets/composer-row.png" alt="输入区那一行：币图标与余额、推理档位灯泡、模型名，从左到右一行" width="560">
   <br>
-  <em>对话窗口里每天看到的样子：币图标与余额、推理档位灯泡，再往右是模型名——都排在同一行。</em>
+  <em>中文界面截图：对话窗口里每天看到的样子：币图标与余额、推理档位灯泡，再往右是模型名——都排在同一行。</em>
 </p>
 
 <p align="center">
   <img src="assets/plugin-page.png" alt="插件详情页：配置表单与两张状态卡片" width="480">
   <br>
-  <em>插件页：上面是配置表单，下面两张卡片各跟随自己 App 的登录状态。</em>
+  <em>中文界面截图：插件页：上面是配置表单，下面两张卡片各跟随自己 App 的登录状态。</em>
 </p>
 
 ## 安装
@@ -102,14 +102,14 @@ dsh plugin --profile web add "$PWD"
 <p align="center">
   <img src="assets/models-tab.png" alt="模型标签：显隐、窗口、倍率" width="480">
   <br>
-  <em>「模型」标签：勾选哪些模型出现在选择器里，同时看窗口与倍率。</em>
+  <em>中文界面截图：「模型」标签：勾选哪些模型出现在选择器里，同时看窗口与倍率。</em>
 </p>
 
 <p align="center">
   <img src="assets/detection-tab.png" alt="检测标签：每个推理模型一行" width="300">
   <img src="assets/credits-tab.png" alt="积分标签：总余额与各套餐余量条" width="300">
   <br>
-  <em>左「检测」：每个推理模型一行，点按钮确认它接受哪些推理档位；右「积分」：总余额，下面是各套餐的余量条。</em>
+  <em>中文界面截图：左「检测」：每个推理模型一行，点按钮确认它接受哪些推理档位；右「积分」：总余额，下面是各套餐的余量条。</em>
 </p>
 
 ## 为什么是手动检测
@@ -122,7 +122,7 @@ WorkBuddy 接口不保证档位信息可靠——有的模型**接受** `reasoni
 <p align="center">
   <img src="assets/reasoning-levels-declared.png" alt="推理档位控件：上游已声明档位、检测按钮禁用" width="300">
   <br>
-  <em>已声明档位的模型：灯泡点亮、档位直接可选，检测按钮禁用。</em>
+  <em>中文界面截图：已声明档位的模型：灯泡点亮、档位直接可选，检测按钮禁用。</em>
 </p>
 
 ## 兼容与限制
