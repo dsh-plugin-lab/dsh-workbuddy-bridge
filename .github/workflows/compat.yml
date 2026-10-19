@@ -92,7 +92,7 @@ jobs:
           # 版本能满足区间时优先用它 —— 不收窄就装出**混合树**（20 个高族 + 1 个低族），
           # `verify` 报的「假绿」来自这个，而不是宿主不兼容。经过见 .agents/notes/2026-10-12-installer-picks-latest-family.md。
           - line: next
-            only: '--only 0.2.0'
+            only: '--only 0.2.1'
             blocking: true
           # 声明面承诺的第二族（旧 RC 族）：声明面承诺了它，所以它红了要看得见；
           # 但它不是承诺线，所以只记录、不阻断 run。
@@ -133,25 +133,35 @@ jobs:
       # 的下限去活文档里找「宿主 + 下限值」，**硬断言至少命中一条** —— 文档写的是原下限，
       # 收窄后就一条也找不到，那条红是判据错位，不是代码有问题（2026-10-12 首跑即此）。
       # 红线判的是**仓库的声明**，不是这次临时的收窄形态。
-      - name: Restore the committed manifest
+      #
+      # **锁文件也必须一起还原**（2026-10-19 修）：swap 里的安装会把 `pnpm-lock.yaml` 重写成收窄后的
+      # specifier，只还原 `package.json` 会让两者对不上 —— 后续每个 `pnpm run <script>` 都会先跑一次
+      # 依赖校验，撞 `ERR_PNPM_OUTDATED_LOCKFILE`（2026-10-19 巡检实红）。
+      #
+      # **而且还原之后不能再让 pnpm 自动装**：清单与锁都回到提交态、`node_modules` 却还是换线后的树，
+      # 自动安装会**静默把旧线的树装回来**，随后 typecheck / 测试跑在旧树上、报出一个假绿
+      # （2026-10-19 本机实测：还原后 `pnpm run typecheck` 触发的安装把 dsh-llm-pi-ai 从 0.2.1-rc.2
+      # 退回了 0.2.0-rc.2，于是错误消失）。所以下面三步都带 `--config.verify-deps-before-run=false`，
+      # 判据是「换线后的树」而不是「重新解析回旧线的那棵树」。
+      - name: Restore the committed manifest and lockfile
         if: always()
-        run: git checkout -- package.json
+        run: git checkout -- package.json pnpm-lock.yaml
 
       - name: Typecheck
         id: typecheck
         continue-on-error: ${{ !matrix.blocking }}
-        run: pnpm run typecheck
+        run: pnpm --config.verify-deps-before-run=false run typecheck
 
       # 顺序是死的：tests/version.spec.ts 断言 lib/ 产物里的版本与包一致，先跑测试必红。
       - name: Build
         id: build
         continue-on-error: ${{ !matrix.blocking }}
-        run: pnpm run build
+        run: pnpm --config.verify-deps-before-run=false run build
 
       - name: Test
         id: test
         continue-on-error: ${{ !matrix.blocking }}
-        run: pnpm test
+        run: pnpm --config.verify-deps-before-run=false test
 
       # 作业级 continue-on-error 免掉的是「阻断」，不是「可见」：哪条线、红在哪一步都进跟踪 issue
       # —— 但只报**承诺线**（记录线红了不追 issue）。
