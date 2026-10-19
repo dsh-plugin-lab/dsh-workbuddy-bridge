@@ -29,13 +29,31 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
- * 我们告诉用户去装的那条 dist-tag 线。README 的「兼容与已知限制」章节与它对齐。
+ * 我们告诉用户去装的那条 dist-tag 线。README 的「版本兼容」章节与它对齐。
  * 这是一条**线名**不是版本号 —— 会漂的是版本，现查即可，所以不写在这里。
  *
- * `next` 就是 RC 线（npm 上**没有 `rc` 这个 tag**，RC 版本全挂在 `next` 上）。
- * 本仓的声明面与姊妹仓同形：`engines.dsh` 与全部 `@deepseek-ai/dsh-*` 逐字相同（红线钉着）。
+ * **2026-10-01 从 `alpha` 换到 `next`**：`next` 就是 RC 线（npm 上**没有 `rc` 这个 tag**，
+ * RC 版本全挂在 `next` 上）。换线的连带面见 `.agents/notes/2026-10-01-track-rc-line.md`。
  */
 export const TRACKED_LINE = 'next'
+
+/**
+ * 巡检要判的**全部目标线**：声明面承诺了哪几族，这里就得判哪几族。
+ *
+ * 为什么不是只判一条：声明面是**三族并集**（0.1.7-rc / 0.2.0-rc / 0.2.1-rc），
+ * 只判其中一条等于「声明了却没验」—— 另外两族烂掉也没有任何判据会红，
+ * 那正是姊妹仓 2026-10-19 修掉的「假绿」同类问题。
+ *
+ * 前一条是 dist-tag（`next` 指向当前承诺线）；后两条用**版本前缀**定位族 ——
+ * 实测没有任何 dist-tag 指向 0.1.7-rc / 0.2.0-rc（现查 `npm view <包> dist-tags`）。
+ *
+ * @type {{ line: string, kind: 'tag' | 'prefix' }[]}
+ */
+export const TRACKED_LINES = [
+  { line: 'next', kind: 'tag' },
+  { line: '0.2.0-rc', kind: 'prefix' },
+  { line: '0.1.7-rc', kind: 'prefix' },
+]
 
 /** 声明面里的宿主本体：`engines.dsh` 描述的就是它。 */
 const HOST_PACKAGE = '@deepseek-ai/dsh'
@@ -50,9 +68,10 @@ const MANIFEST_FIELDS = ['dependencies', 'devDependencies', 'peerDependencies']
 const LINES = ['alpha', 'next', 'latest']
 
 const USAGE = `usage:
-  node scripts/check-declaration.mjs [--line <${LINES.join('|')}>]
+  node scripts/check-declaration.mjs                 # judge every declared line (${TRACKED_LINES.map((target) => target.line).join(' / ')})
+  node scripts/check-declaration.mjs --line next     # judge one dist-tag line only
 
-exit codes: 0 = the declaration covers the line / 1 = it does not / 2 = usage or precondition error`
+exit codes: 0 = every declared range covers every target line / 1 = it does not / 2 = usage or precondition error`
 
 const tagsCache = new Map()
 
@@ -143,20 +162,59 @@ function declarations(manifest) {
 }
 
 /**
+ * 从 registry 读一个包的全部已发布版本（用来按**版本前缀**定位一族）。
+ * @param name - 包名。
+ * @returns 版本号列表。
+ */
+async function publishedVersions(name) {
+  if (versionsCache.has(name)) return versionsCache.get(name)
+  const response = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`, {
+    headers: { accept: 'application/vnd.npm.install-v1+json' },
+  })
+  if (!response.ok) throw new Error(`registry answered ${response.status} for ${name}`)
+  const body = await response.json()
+  const versions = Object.keys(body.versions ?? {})
+  versionsCache.set(name, versions)
+  return versions
+}
+
+/**
+ * 把一条「目标线」解析成某个包在该线上的版本。
+ *   - dist-tag：读该 tag 指向的版本；
+ *   - 版本前缀：取该前缀下**最高的**已发布版本（没有 dist-tag 指向那些族）。
+ * @param name - 包名。
+ * @param target - 目标线。
+ * @returns 版本；取不到时抛错（声明了那条线却拿不到版本，是前置条件问题，不是「罩不住」）。
+ */
+async function resolveTargetVersion(name, target) {
+  if (target.kind === 'tag') {
+    const version = (await distTags(name))[target.line]
+    if (typeof version !== 'string') throw new Error(`${name} has no ${target.line} dist-tag`)
+    return version
+  }
+  const versions = await publishedVersions(name)
+  const matching = versions.filter((version) => version.startsWith(target.line)).sort()
+  if (matching.length === 0)
+    throw new Error(`${name} has no published version starting with ${target.line}`)
+  return matching[matching.length - 1]
+}
+
+/**
  * 跑一次检查。
- * @param line - 要判的 dist-tag 线。
+ * @param only - 只判这一条 dist-tag 线（`--line`）；省略时判 `TRACKED_LINES` 里的全部目标线。
  * @returns 进程退出码。
  */
-async function check(line) {
+async function check(only) {
   const manifest = JSON.parse(readFileSync('package.json', 'utf8'))
   const decls = declarations(manifest)
   if (decls.length === 0) throw new Error('package.json declares no dsh compatibility range at all')
 
+  const targets = only === undefined ? TRACKED_LINES : [{ line: only, kind: 'tag' }]
   console.log(
-    `[INFO] tracked line: ${line} (the dist-tag line the README's version-compatibility section names)`,
+    `[INFO] target lines: ${targets.map((target) => `${target.line} (${target.kind})`).join(' / ')}`,
   )
 
-  // 上下文：三条线现在各指向什么。只有被跟的那条会因为「罩不住」变红。
+  // 上下文：三条 dist-tag 现在各指向什么。
   const names = [...new Set(decls.map((entry) => entry.name))].sort()
   for (const name of names) {
     const tags = await distTags(name)
@@ -164,48 +222,47 @@ async function check(line) {
     console.log(`[INFO] ${name}  ${cells}`)
   }
 
-  const lineVersions = new Map()
-  for (const name of names) {
-    const version = (await distTags(name))[line]
-    if (typeof version !== 'string') throw new Error(`${name} has no ${line} dist-tag`)
-    lineVersions.set(name, version)
-  }
+  const failures = []
+  for (const target of targets) {
+    const lineVersions = new Map()
+    for (const name of names) lineVersions.set(name, await resolveTargetVersion(name, target))
 
-  const uncovered = []
-  for (const entry of decls) {
-    const version = lineVersions.get(entry.name)
-    const matches = matchingVersions(entry.name, entry.range)
-    if (matches.includes(version)) {
+    const uncovered = []
+    for (const entry of decls) {
+      const version = lineVersions.get(entry.name)
+      const matches = matchingVersions(entry.name, entry.range)
+      if (matches.includes(version)) continue
+      uncovered.push(entry)
       console.log(
-        `[INFO] ${entry.where} declares ${entry.range} for ${entry.name} — covers ${version}`,
+        `[WARN] ${entry.where} declares ${entry.range} for ${entry.name} — does NOT cover ${version} (${target.line})`,
       )
-      continue
     }
-    uncovered.push(entry)
-    console.log(
-      `[WARN] ${entry.where} declares ${entry.range} for ${entry.name} — does NOT cover ${version}`,
-    )
+    const covered = decls.length - uncovered.length
+    console.log(`[NOTE] line ${target.line}: ${covered}/${decls.length} declared ranges cover it`)
+    if (uncovered.length > 0) failures.push({ target: target.line, uncovered })
   }
 
-  // 判据落在被跟的那条线上，而不是 `latest`：宿主 `latest` 指向的版本比被跟的线还旧
-  // （README 的安装一节因此要求显式点名版本线）。`latest` 更旧这件事是实测出来的，
-  // 所以这里现比一次、打印出来，而不是把结论写死。
+  // 判据落在被跟的线上，而不是 `latest`：宿主 `latest` 指向的版本比被跟的线还旧
+  // （README 的安装一节因此要求显式点名版本线）。
   const hostTags = await distTags(HOST_PACKAGE)
-  if (hostTags.latest !== undefined && hostTags.latest !== hostTags[line]) {
+  const primary = targets[0].line
+  if (hostTags.latest !== undefined && hostTags.latest !== hostTags[primary]) {
     console.log(
-      `[NOTE] ${HOST_PACKAGE} latest=${hostTags.latest} differs from ${line}=${hostTags[line]}; the judgement is on the ${line} line.`,
+      `[NOTE] ${HOST_PACKAGE} latest=${hostTags.latest} differs from next=${hostTags.next}; the judgement is on the declared lines.`,
     )
   }
 
-  if (uncovered.length === 0) {
+  if (failures.length === 0) {
     console.log(
-      `[NOTE] declaration check passed: all ${decls.length} declared ranges cover the ${line} line`,
+      `[NOTE] declaration check passed: all ${decls.length} declared ranges cover every target line (${targets.map((target) => target.line).join(', ')})`,
     )
     return 0
   }
-  console.log(
-    `[WARN] declaration check failed: ${uncovered.length} of ${decls.length} declared ranges do not cover the ${line} line`,
-  )
+  for (const failure of failures) {
+    console.log(
+      `[WARN] declaration check failed: ${failure.uncovered.length} of ${decls.length} declared ranges do not cover the ${failure.target} line`,
+    )
+  }
   console.log(
     '[NOTE] update the declared ranges in package.json to a version you actually tested, or move the tracked line.',
   )
@@ -218,9 +275,16 @@ function usageError(message) {
   process.exit(2)
 }
 
+const versionsCache = new Map()
+
+/**
+ * 解析 `--line`：省略时返回 `undefined`（判全部目标线）。
+ * @param argv - 命令行参数。
+ * @returns 要判的 dist-tag 线，或 `undefined`。
+ */
 function parseLine(argv) {
   const index = argv.indexOf('--line')
-  if (index === -1) return TRACKED_LINE
+  if (index === -1) return undefined
   const line = argv[index + 1]
   if (!line) usageError('--line needs a dist-tag after it')
   if (!LINES.includes(line)) usageError(`unknown dist-tag: ${line}`)
