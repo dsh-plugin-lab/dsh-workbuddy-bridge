@@ -666,3 +666,194 @@ describe('文档不抄实测值', () => {
     expect(mentionsHostVersion('本仓只支持 DSH 0.1.7；下限见 package.json。')).toBe(true)
   })
 })
+
+/**
+ * 红线 6：门面图**不住在包里**，README 用**相对路径**引用它们。
+ *
+ * 两件独立的事合成一条判据（缺一面就是另一种坏法）：
+ *
+ * **① 体积**：市场每小时从 npm 抓四个插件包，只为读包里的 `locale/` 与图标。只给 README 看的
+ * 门面图若跟着包发出去，安装者就要为它们付流量，市场那一轮构建也得把它们下下来。
+ * 本仓 `assets/` 本来就不在 `files` 里，这一面是**断言现状** —— 防止哪天有人把 `assets`
+ * 加进 `files`（一旦加上，七张截图会静默进包，没有别的守卫会发现）。
+ *
+ * **② 写法**：README 一律用**相对路径**。npm 会把 README 的相对图片路径解析到仓库的 raw 文件
+ * （维护者 2026-10-20 在 npm 页面上实地确认；同一事实在 `dsh-zhihu-search/assets/README.md`
+ * 早有记录），所以「不进包 + 相对引用」成立且统一 —— 四个插件仓都这么写。
+ * 绝对 URL 是**例外形态**：它把 owner/repo/分支硬编码进散文，仓改名或转移就静默破图，
+ * 旧版本页面还会跟着 `main` 漂。只有「图确实在别的仓」时才该用，本仓没有这种图。
+ *
+ * 四面：
+ *   1. 两份门面里的图都是**相对路径**，且没有 `raw.githubusercontent.com` 形态；
+ *   2. 相对路径指向的文件**在仓里存在**（写错或删了文件没有任何报错，图静默不显示）；
+ *   3. `assets/` 下的门面图**不被 `files` 覆盖**；
+ *   4. 反向面：**代码有没有按包内路径引用 `assets/`** —— 本仓没有运行期资产，见该面的说明。
+ */
+describe('红线 6：门面图不进包，README 用相对路径引用', () => {
+  /** 门面双件。 */
+  const FACADE = ['README.md', 'README_en.md']
+
+  /** 只有 `assets/` 下的图是「只给 README 看」的；`icon.svg` 随包，不在本判据的对象里。 */
+  const README_ONLY = /^assets\//
+
+  /** 读出某份门面里所有 `<img src>` 及其行号。 */
+  function imageRefs(file: string): { src: string; line: number }[] {
+    const out: { src: string; line: number }[] = []
+    read(file)
+      .split('\n')
+      .forEach((line, index) => {
+        for (const m of line.matchAll(/<img\s+src="([^"]+)"/g)) {
+          out.push({ src: m[1] ?? '', line: index + 1 })
+        }
+      })
+    return out
+  }
+
+  /** 某条 `files` 正向条目能不能覆盖目标（只认本仓用到的形态：裸目录、显式路径、`**`）。 */
+  function covers(entry: string, target: string): boolean {
+    if (entry.startsWith('!')) return false
+    const clean = entry.replace(/^\.\//, '').replace(/\/+$/, '')
+    if (clean === '') return false
+    if (clean === target) return true
+    if (clean.endsWith('/**')) return target.startsWith(clean.slice(0, -3) + '/')
+    return target.startsWith(clean + '/')
+  }
+
+  /** 某条取反条目能不能命中目标（同上，只认本仓用到的形态）。 */
+  function negatedEntry(entry: string, target: string): boolean {
+    const pattern = entry.slice(1).replace(/^\.\//, '')
+    if (pattern === '') return false
+    if (pattern.endsWith('/**')) return target.startsWith(pattern.slice(0, -3) + '/')
+    const clean = pattern.replace(/\/+$/, '')
+    return target === clean || target.startsWith(clean + '/')
+  }
+
+  /** 这个路径会不会真的进包：被某条正向条目覆盖、且没被任何取反条目命中。 */
+  function shipped(target: string): boolean {
+    return (
+      pkg.files.filter((e) => !e.startsWith('!')).some((e) => covers(e, target)) &&
+      !pkg.files.filter((e) => e.startsWith('!')).some((e) => negatedEntry(e, target))
+    )
+  }
+
+  /**
+   * 判据本体：给定一份门面正文与一个「是否进包」的判定，返回违规描述。
+   *
+   * 抽成函数是为了**否证能真的跑起来**（把变异后的文本喂回来），而不是只断言「现在通过」。
+   *
+   * @param readme - 门面文件名，只用于报错文案。
+   * @param body - 门面正文。
+   * @param isShipped - 路径是否进包；注入是为了变异时能换掉判定而不动磁盘。
+   * @returns 违规描述；空数组表示通过。
+   */
+  function facadeImageOffenders(
+    readme: string,
+    body: string,
+    isShipped: (target: string) => boolean,
+  ): string[] {
+    const offenders: string[] = []
+    body.split('\n').forEach((line, index) => {
+      for (const m of line.matchAll(/<img\s+src="([^"]+)"/g)) {
+        const src = m[1] ?? ''
+        const where = `${readme}:${index + 1}`
+        // 面 1：绝对 raw 形态一律不算通过，哪怕目标当前可取（见上方「② 写法」）。
+        if (/raw\.githubusercontent\.com/.test(src)) {
+          offenders.push(`${where} 用绝对 raw URL 引用图（家族统一用相对路径）：${src}`)
+          continue
+        }
+        // 徽章类外链不在本判据范围内。
+        if (/^https?:\/\//.test(src)) continue
+        // 面 2：相对引用必须真的指到仓里的文件。
+        if (!existsSync(new URL(`../${src}`, import.meta.url))) {
+          offenders.push(`${where} 相对引用的文件在仓里不存在：${src}`)
+        }
+        // 面 3：只给 README 看的图不许进包。
+        if (README_ONLY.test(src) && isShipped(src)) {
+          offenders.push(`${where} 门面图跟着包发出去了（应留在仓里）：${src}`)
+        }
+      }
+    })
+    return offenders
+  }
+
+  it('两份门面的图都是相对路径，且没有绝对 raw 形态', () => {
+    for (const readme of FACADE) {
+      const offenders = facadeImageOffenders(readme, read(readme), shipped)
+      expect(offenders, offenders.join('\n')).toEqual([])
+    }
+  })
+
+  it('扫描器确实看到了图（否则上面那条是假绿）', () => {
+    const total = FACADE.reduce((n, file) => n + imageRefs(file).length, 0)
+    expect(total, '两份门面里一张 <img> 都没扫到 —— 扫描器坏了').toBeGreaterThan(4)
+    const readmeOnly = FACADE.flatMap(imageRefs).filter((ref) => README_ONLY.test(ref.src))
+    expect(readmeOnly.length, '`assets/` 门面图一张都没扫到 —— 正则或路径规则坏了').toBeGreaterThan(
+      4,
+    )
+  })
+
+  it('这些门面图确实不在包里（`files` 里没有 `assets`）', () => {
+    const targets = FACADE.flatMap(imageRefs)
+      .map((ref) => ref.src)
+      .filter((src) => README_ONLY.test(src))
+    expect(targets.length, '一张 `assets/` 门面图都没取到').toBeGreaterThan(4)
+    // 这一面在本仓是**断言现状**：`files` 本来就不含 `assets`。
+    // 若哪天有人把它加进去，这条与上面那条会一起红 —— 那正是要的效果。
+    for (const target of targets) expect(shipped(target), `${target} 竟然进包了`).toBe(false)
+  })
+
+  it('面 4 不适用：本仓 `assets/` 里没有运行期资产（代码不按包内路径找它）', () => {
+    // `dsh-plugin-debugging` 的 `assets/` 含 `launcher.js` / `*.vbs` / `stop-window.ps1` 等
+    // 运行期资产，那一面在那里断言「必须仍在包里」。**本仓没有这类文件**（`assets/` 全是
+    // 为 README 与截图说明服务的图），所以这一面没有对象 —— 但**不静默删掉**：
+    // 这里反过来断言「代码里一条对 `assets/` 的包内路径引用都没有」。
+    // 将来真加了运行期资产，这条会红，来把它改写成「这些路径必须仍在包里」的那一面。
+    const codeRefs: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(new URL(`../${dir === '' ? '.' : dir}`, import.meta.url), {
+        withFileTypes: true,
+      })) {
+        const path = dir === '' ? entry.name : `${dir}/${entry.name}`
+        if (entry.isDirectory()) {
+          if (['node_modules', 'lib', '.git', 'docs', 'assets', 'tests'].includes(entry.name)) {
+            continue
+          }
+          walk(path)
+          continue
+        }
+        if (!/\.(ts|tsx|mts|js|mjs|cjs)$/.test(entry.name)) continue
+        if (read(path).includes('assets/')) codeRefs.push(path)
+      }
+    }
+    walk('src')
+    expect(
+      codeRefs,
+      '代码开始按包内路径引用 assets/ 了 —— 这一面不再是「不适用」，请改写成「必须仍在包里」',
+    ).toEqual([])
+  })
+
+  it('判据可被否证：改成绝对 URL / 塞进 files / 指到不存在的文件，都会红', () => {
+    const body = read('README.md')
+    expect(body, 'README.md 里没有相对引用的门面图 —— 变异的前提没了').toContain(
+      'src="assets/model-picker.png"',
+    )
+
+    // 变异 1：一张图改成绝对 raw URL。
+    const absolute = body.replace(
+      'src="assets/model-picker.png"',
+      'src="https://raw.githubusercontent.com/dsh-plugin-lab/dsh-workbuddy-bridge/main/assets/model-picker.png"',
+    )
+    expect(absolute, '变异没落地').not.toBe(body)
+    expect(facadeImageOffenders('README.md', absolute, shipped).length).toBeGreaterThan(0)
+
+    // 变异 2：把 `assets` 塞进 files —— 门面图会被算成随包。
+    expect(
+      facadeImageOffenders('README.md', body, (target) => target.startsWith('assets/')).length,
+    ).toBeGreaterThan(0)
+
+    // 变异 3：指到一个不存在的文件。
+    const missing = body.replace('src="assets/model-picker.png"', 'src="assets/not-there.png"')
+    expect(missing, '变异没落地').not.toBe(body)
+    expect(facadeImageOffenders('README.md', missing, shipped).length).toBeGreaterThan(0)
+  })
+})
