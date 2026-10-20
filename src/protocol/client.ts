@@ -393,13 +393,21 @@ function billingHeaders(credential: WorkBuddyCredential): Record<string, string>
  * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
  * force `stream: true` (the upstream rejects non-streaming), flatten
  * `tool_choice` (the upstream's field is a string; object forms return 400),
- * and rewrite `developer` messages as `system`.
+ * rewrite `developer` messages as `system`, and drop the adapter's own `off`
+ * effort spelling (see {@link dropUnsupportedEffort}).
  *
  * The `developer` rewrite is load-bearing: pi-ai emits the system prompt as
  * `role: "developer"` (the OpenAI convention it adopted), but the WorkBuddy
  * upstream rejects that role with HTTP 400 code 11128 ("Illegal API
  * invocation from an unapproved channel"). Rewriting to `system` is the
  * compatible spelling the upstream accepts.
+ *
+ * Every transformation here is region-agnostic on purpose. The two endpoints
+ * differ in what they *add* (the international one also needs a leading system
+ * prompt — see {@link prepareInternationalChatBody}), not in what they reject:
+ * both refuse the picker's `off` spelling, which is why that strip lives here
+ * rather than in the international layer (issue #13 reversed the earlier
+ * international-only scope decision, which rested on CN accepting it).
  */
 export function prepareChatBody(source: string): string {
   let body: unknown
@@ -413,6 +421,7 @@ export function prepareChatBody(source: string): string {
   obj['stream'] = true
   normalizeDeveloperRole(obj)
   normalizeToolChoice(obj)
+  dropUnsupportedEffort(obj)
   return JSON.stringify(obj)
 }
 
@@ -561,7 +570,20 @@ export class WorkBuddyUpstreamClient {
       options.resolveChatIdentity ?? ((region) => resolveChatIdentity(region))
   }
 
-  /** POST the chat endpoint; a successful answer is the raw SSE response. */
+  /**
+   * POST the chat endpoint; a successful answer is the raw SSE response.
+   *
+   * This is the one place every chat request converges on (the loopback shim,
+   * the host LLM route, and any direct caller all end up here), so it is also
+   * where the body is normalized for the upstream — in *both* regions. The
+   * region only decides which extra requirement applies on top: the
+   * international gateway additionally demands a leading system message. It
+   * used to decide whether the body was normalized at all, which left the CN
+   * path sending the picker's `off` spelling verbatim (issue #13).
+   *
+   * Normalization is idempotent, so a caller that already prepared the body
+   * (the shim does) sees no second change.
+   */
   async chatStream(
     credential: WorkBuddyCredential,
     bodyJson: string,
@@ -577,6 +599,8 @@ export class WorkBuddyUpstreamClient {
     } catch {
       userAgent = chatUserAgent(fallbackChatIdentity(region), region)
     }
+    const body =
+      region === 'global' ? prepareInternationalChatBody(bodyJson) : prepareChatBody(bodyJson)
     let response: Response
     try {
       response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
@@ -585,7 +609,7 @@ export class WorkBuddyUpstreamClient {
           ...chatHeaders(credential, userAgent),
           Authorization: `Bearer ${credential.accessToken}`,
         },
-        body: region === 'global' ? prepareInternationalChatBody(bodyJson) : bodyJson,
+        body,
         ...(signal === undefined ? {} : { signal }),
       })
     } catch (error: unknown) {
@@ -1296,6 +1320,11 @@ export function modelWithCurrentPromotion(
  * merged: existing messages keep their order and wording. A body that is not a
  * JSON object is returned unchanged, exactly as {@link prepareChatBody} does,
  * so this is safe to run over an already-prepared-or-not body.
+ *
+ * This layer now carries *only* that requirement. The `reasoning_effort` strip
+ * used to live here, scoped to this region; issue #13 showed CN rejects the
+ * same spelling, so it moved into the shared {@link prepareChatBody} and this
+ * function no longer touches the effort field at all.
  */
 export function prepareInternationalChatBody(source: string): string {
   const prepared = prepareChatBody(source)
@@ -1307,11 +1336,6 @@ export function prepareInternationalChatBody(source: string): string {
     return prepared
   }
   if (!isObject(body)) return prepared
-  // Region-scoped strip, deliberately *after* the shared `prepareChatBody`:
-  // the CN variant keeps its existing request behaviour — `reasoning_effort`
-  // is passed through verbatim there, including the adapter's own `off`
-  // spelling. See `dropUnsupportedEffort` below for why only this region drops it.
-  dropUnsupportedEffort(body)
   const messages = body['messages']
   if (!Array.isArray(messages)) return JSON.stringify(body)
   const first = messages[0]
@@ -1322,25 +1346,35 @@ export function prepareInternationalChatBody(source: string): string {
 }
 
 /**
- * Remove the adapter's own `off` effort spelling from the **international** wire.
+ * Remove the adapter's own `off` effort spelling from the wire, in both regions.
  *
- * `thinkingLevelMap.off` is pinned to the literal `'off'` for models that
- * declare `canDisableThinking`, so that the level stays selectable. pi-ai
- * sends that value for any request carrying no explicit level, and the
- * international endpoint rejects it on the GPT family with HTTP 400 `11133` /
- * `extError.param === 'reasoning.effort'` (issue #49). Omission is the only
- * form measured good on every such model; a literal `'none'` is *not* a safe
- * substitute — accepted by the GPT-5.6 family and GLM, rejected by
- * `gpt-6-astra`.
+ * `thinkingLevelMap.off` is pinned to the literal `'off'` so the level stays
+ * selectable in the picker — pi-ai exposes a level only when its entry is a
+ * string — but that same entry is also the value pi-ai puts on the wire, both
+ * for an explicit Off selection and for *every* request that carries no level
+ * at all. `'off'` is a picker name, not an upstream spelling, and both
+ * endpoints reject it:
  *
- * Consequences, stated honestly: the international picker still offers Off,
- * but selecting it now means "the field is omitted" — the model's actual
- * behaviour is decided upstream and is *not* guaranteed to disable thinking
- * or to match the catalog's `defaultEffort`. Declared spellings
- * (`low`/`medium`/`high`/`xhigh`/`max`) and an explicit `none` pass through
- * untouched. The CN variant is deliberately unaffected: its endpoint has
- * accepted this spelling in every measurement so far, and keeping its wire
- * unchanged is a scope decision, not a claim about that endpoint's future.
+ * - international GPT family: HTTP 400 `11133` / `extError.param ===
+ *   'reasoning.effort'` (issue #49);
+ * - CN: the same 400 `11133` on every `canDisableThinking` model — measured
+ *   on `deepseek-v4.1-flash`, where the author also confirmed `'disabled'`
+ *   is rejected and `'none'` answers 200 (issue #13). This is what made the
+ *   earlier international-only scope decision obsolete.
+ *
+ * Omission is the only form measured good on every affected model, so it is
+ * the only form this function can produce; a literal `'none'` is *not* a safe
+ * substitute (accepted by the GPT-5.6 family and GLM, rejected by
+ * `gpt-6-astra`, and silently ignored by `kimi-k2.8-preview`). Declared
+ * spellings (`low`/`medium`/`high`/`xhigh`/`max`) and an explicit `none` pass
+ * through untouched — the adapter does not decide a user's `none` for them.
+ *
+ * Consequences, stated honestly: the picker still offers Off in both regions,
+ * but selecting it means "the field is omitted". The model's actual behaviour
+ * is then decided upstream — *not* guaranteed to disable thinking and not
+ * guaranteed to match the catalog's `defaultEffort`. The plugin used to claim
+ * more than that on CN, where `'off'` was merely accepted (accepted never
+ * meant effective); #13 is why the claim is withdrawn rather than reworded.
  */
 function dropUnsupportedEffort(obj: Record<string, unknown>): void {
   if (obj['reasoning_effort'] === 'off') delete obj['reasoning_effort']

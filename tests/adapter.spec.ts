@@ -54,12 +54,11 @@ describe('WorkBuddy adapter model descriptors', () => {
   it('keeps the `off` thinking level selectable when thinking can be disabled', () => {
     // `off` must stay pinned to a string: pi-ai exposes a level only when its
     // `thinkingLevelMap` entry is a string, and `null` would drop it from the
-    // picker. The wire spelling is handled only in
-    // `prepareInternationalChatBody` (dropped there; the CN variant passes it
-    // through) — see `dropUnsupportedEffort` and its specs, plus issue #49.
-    // Known limitation that stays: selecting Off on the international side
-    // does not guarantee thinking is disabled — the field is omitted and the
-    // upstream decides.
+    // picker. The wire spelling is never sent: the shared `prepareChatBody`
+    // strips that exact value in *both* regions (issues #49 and #13), so
+    // selecting Off means "no `reasoning_effort` on the wire".
+    // Known limitation that stays: Off therefore does not guarantee thinking is
+    // disabled — the field is omitted and the upstream decides.
     const catalog = new WorkBuddyCatalog([
       {
         id: 'model',

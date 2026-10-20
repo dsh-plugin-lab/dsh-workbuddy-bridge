@@ -174,6 +174,13 @@ export interface WorkBuddyAdapter {
  * The offered set is described internally as "verified accepted", never as
  * "verified effective": acceptance proves the upstream did not reject the
  * spelling, not that it changes what the model does.
+ *
+ * `off` is a picker name, not a wire spelling. It stays pinned to the literal
+ * `'off'` (a `null` here would remove the level from the picker entirely), and
+ * the shared preparation in `src/protocol/client.ts` strips that exact value
+ * before the request leaves the plugin — in both regions, because both
+ * endpoints reject it (issues #49 and #13). Selecting Off therefore means "send
+ * no `reasoning_effort`", and what the model then does is upstream's call.
  */
 export function reasoningFields(
   info: WorkBuddyModelInfo,

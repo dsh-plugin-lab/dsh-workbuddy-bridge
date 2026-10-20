@@ -1068,12 +1068,17 @@ describe('WorkBuddyUpstreamClient.fetchModels badge merge', () => {
   })
 })
 
-describe('chatStream wire effort by region (issue #49)', () => {
+describe('chatStream wire effort (issues #49 and #13)', () => {
   /**
-   * THE REGION-SPLIT ACCEPTANCE: judged on the request that actually leaves
-   * `chatStream`, not on any intermediate helper. The CN variant must keep its
-   * existing wire (the adapter's own `off` spelling included); the
-   * international variant must drop exactly that spelling and nothing else.
+   * THE WIRE ACCEPTANCE: judged on the request that actually leaves
+   * `chatStream`, not on any intermediate helper. Both regions must drop the
+   * adapter's own `off` spelling and nothing else.
+   *
+   * This used to be a *region split* — CN kept `off`, the international variant
+   * dropped it. Issue #13 removed the CN half of that assumption: the CN
+   * endpoint now answers 400 / `11133` for `off` on every `canDisableThinking`
+   * model, so keeping the spelling there was a live bug rather than a
+   * compatibility guarantee.
    */
   const AI_CREDENTIAL: WorkBuddyCredential = { ...CREDENTIAL, domain: 'www.workbuddy.ai' }
 
@@ -1105,8 +1110,8 @@ describe('chatStream wire effort by region (issue #49)', () => {
       : (calls[0].body as Record<string, unknown>)['reasoning_effort']
   }
 
-  it('CN keeps the `off` spelling; international drops it', async () => {
-    expect(await wireEffort(CREDENTIAL, 'off')).toBe('off')
+  it('drops the `off` spelling in both regions', async () => {
+    expect(await wireEffort(CREDENTIAL, 'off')).toBeUndefined()
     expect(await wireEffort(AI_CREDENTIAL, 'off')).toBeUndefined()
   })
 

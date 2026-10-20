@@ -20,13 +20,32 @@ describe('prepareChatBody', () => {
     expect(body['tool_choice']).toBe('auto')
   })
 
-  it("passes `reasoning_effort` through verbatim, including the adapter's own `off` (issue #49)", () => {
-    // The shared preparation is region-agnostic: the CN variant keeps its
-    // existing wire behaviour, so `off` (and any other value) survives here.
-    // The international-only strip lives one layer down, in
-    // `prepareInternationalChatBody` — pinned by the tests below and by the
-    // chatStream-level spec in upstream.spec.ts.
-    for (const effort of ['off', 'low', 'medium', 'high', 'xhigh', 'max', 'none']) {
+  it("drops the picker's own `off` spelling, in both regions (issues #49 and #13)", () => {
+    // `off` is what `thinkingLevelMap.off` pins, so pi-ai puts it on the wire
+    // both for an explicit Off selection and for every request that carries no
+    // level at all. Neither endpoint accepts it as a `reasoning_effort` value:
+    // #49 measured the international GPT family, #13 measured CN. Omission is
+    // the only form measured good everywhere, so the *shared* preparation drops
+    // it and the international layer no longer has to.
+    for (const body of [
+      { messages: [], reasoning_effort: 'off' },
+      // No messages array: the transformation must not be conditional on shape.
+      { reasoning_effort: 'off' },
+    ]) {
+      expect('reasoning_effort' in JSON.parse(prepareChatBody(JSON.stringify(body)))).toBe(false)
+    }
+    expect(
+      'reasoning_effort' in
+        JSON.parse(prepareChatBody(JSON.stringify({ reasoning_effort: 'off', model: 'm' }))),
+    ).toBe(false)
+  })
+
+  it('passes every other effort value through verbatim, `none` included', () => {
+    // A user-chosen `none` (or any declared level) is not the adapter's own
+    // spelling, so the wire keeps it: the adapter does not decide the user's
+    // `none` for them, and a wrong guess there would be a silent behaviour
+    // change rather than a rejected request.
+    for (const effort of ['low', 'medium', 'high', 'xhigh', 'max', 'none']) {
       const body = JSON.parse(
         prepareChatBody(JSON.stringify({ messages: [], reasoning_effort: effort })),
       )
@@ -132,13 +151,17 @@ describe('regionOf', () => {
   })
 })
 
-describe('prepareInternationalChatBody effort handling (issue #49)', () => {
+describe('prepareInternationalChatBody effort handling (issues #49 and #13)', () => {
   it("drops the adapter's own `off` spelling on the international wire", () => {
     // pi-ai sends `model.thinkingLevelMap.off` for every request that carries
     // no explicit level; the international endpoint rejects it on the GPT
     // family with 400 / 11133 / `extError.param === 'reasoning.effort'`.
     // Omission is the only form measured good on every such model — including
     // `gpt-6-astra`, which also rejects a literal `'none'`.
+    //
+    // The strip itself now lives in the shared `prepareChatBody` (#13 showed CN
+    // rejects the same spelling); this case stays because the international
+    // layer must not reintroduce it, and it is the region the GPT family lives in.
     const body = JSON.parse(
       prepareInternationalChatBody(
         JSON.stringify({
@@ -168,7 +191,8 @@ describe('prepareInternationalChatBody effort handling (issue #49)', () => {
   it('strips `off` on every early-return path, not only the system-prompt one', () => {
     // A body without a messages array takes an early return; the strip must
     // still apply, or such a request would reach the international endpoint
-    // carrying the rejected spelling.
+    // carrying the rejected spelling. It does, because the strip happens in the
+    // shared layer *before* the region-specific branching.
     const body = JSON.parse(
       prepareInternationalChatBody(JSON.stringify({ reasoning_effort: 'off' })),
     )

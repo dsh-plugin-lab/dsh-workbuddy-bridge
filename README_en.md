@@ -54,6 +54,8 @@ models appear directly in the DSH model picker — no separate provider to confi
   on the plugin page. The bulb means "this model can switch levels"; a declared model shows it too, it just
   has nothing to detect. A switchable model also carries a **default level** (the upstream's own declaration
   when it has one, otherwise `high`), so the picker no longer offers "Default".
+  **Off means "send no level parameter"**: neither endpoint accepts that literal, so the plugin never puts it
+  on the wire — whether thinking is then actually disabled is up to the upstream, and the plugin makes no claim.
 - **Credit in view** — each reply shows what it consumed, and remaining credit sits beside the model picker.
   Nothing renders when a figure is unavailable.
 - **Model visibility** — tick which models appear in the picker on the card's "Models" tab, saved per

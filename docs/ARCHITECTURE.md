@@ -174,15 +174,36 @@ src/
 
 两处上报，缺一不可：选择器读 `resolveModel()`，请求路径读 `prepareCall()`，只在一边报就会出现「选择器显示某档、实际请求发的是另一档」。
 
+### Off：选择器的档位名，不是 wire 拼写
+
+`thinkingLevelMap.off` 被钉成字面量 `'off'`（改成 `null` 会让 Off 从选择器里消失），而 pi-ai **把同一个条目不只用在这个档位上**：用户显式选 Off 时发它，**任何没指定档位的请求也自动发它**。所以 `'off'` 一旦是字符串，它就同时是"选择器里的一项"和"wire 上的一个值"。
+
+上游只承认前者。两个端点都拒绝这个拼写：
+
+| 端点 | 观测 | 来源 |
+|---|---|---|
+| 国际版 GPT 系 | 400 / `11133` / `extError.param === 'reasoning.effort'` | issue #49 |
+| 国内版全部 `canDisableThinking` 模型 | 同样是 400 / `11133` | issue #13 |
+
+于是 wire 边界（`src/protocol/client.ts` 的 `prepareChatBody()`，`chatStream` 对两个 region 都过一遍）**删掉这个字面量**，选择器照旧显示 Off。语义因此明确降级为：**Off = 不发送 `reasoning_effort`**，实际行为由上游决定——不保证关闭思考，也不保证等于目录声明的 `defaultEffort`。
+
+三个不能顺手改的边界：
+
+- **`'none'` 不替换、不删除**：它是用户可选的显式拼写，两版都原样透传。而且它并非安全替代品——`gpt-6-astra` 拒它，`kimi-k2.8-preview` 收下却静默忽略。
+- **`off` 不进探测候选**（`PROBE_EFFORT_CANDIDATES`）：探测只能证明"上游收下这个拼写"，证明不了"思考被关掉了"，而"接受 ≠ 生效"是本仓探测系统的第一条原则。
+- **不要按模型写死映射**：同一个拼写在三家供应商后面有三种现实，静态快照必过期（判据与先例见[归档记录](archive/reasoning-effort-off-wire-issue-49-2026-09-23.md)与[决策记录](../.agents/notes/2026-10-20-off-effort-strip-both-regions.md)）。
+
 ## 兼容性契约（改动前必读）
 
 以下行为不是实现细节，改动它们等于丢弃用户磁盘上的数据：
 
 - **`fingerprintModel` 的输入键序**（`src/probe/store.ts`）：指纹是 `JSON.stringify` 的直接哈希，`reasoning` 对象的**键插入顺序**是哈希的一部分。重排 `resolveUpstreamReasoning`（`src/protocol/client.ts`）里的键会静默作废所有已存的推理档位观测。键序在此文件里是故意固定的。
-- **`canDisableThinking` 的缺省不对称**：行内没有 `reasoning` 块时缺省 `true`（这种行 adapter 根本不会发 effort，值无关紧要）；**有**块但没写这个字段时严格 `=== true`（这类是会在 wire 上拒绝 `off` 的老模型）。不要"统一"成一边。
+- **`canDisableThinking` 的缺省不对称**：行内没有 `reasoning` 块时缺省 `true`（这种行 adapter 根本不会发 effort，值无关紧要）；**有**块但没写这个字段时严格 `=== true`——这个布尔量现在的唯一作用是「选择器要不要显示 Off 档」，而上游从没承诺过"没声明就支持关闭思考"。不要"统一"成一边。
 - **上游解析的严格性**（`src/protocol/client.ts`）：字段一律 `typeof` 收窄，不用 schema 校验库替代——schemastery 会把 `'120'` 强转成 `120`、给缺失的可选子对象补 `{}`，两类静默转换分别破坏"usage 字段非数字要报错"和"reasoning 块缺省"两条已测行为。
 - **探测记录的账号归属**：每条观测绑定产生它的账号，切换账号后旧账号的观测不消失（留在盘上）但不再被读出。
 - **默认档位必须是档位集成员**（`resolveDefaultEffort`，`src/probe/efforts.ts`）：报一个档位集之外的档位，会让每个省略档位的请求以 `UNSUPPORTED_REASONING_EFFORT` 失败——判据的"集合内兜底"（声明优先 → `high` → 集合首项）不是实现细节，是用户可感知行为的契约。
+- **`chatStream` 对两个 region 都做请求体归一化**（`src/protocol/client.ts`）：`off` 的 strip 住在共享层，region 只决定国际版额外补的首条 `system` 消息。改成"CN 原样透传"会让国内版重新把 `off` 发到 wire 上（issue #13 的故障形态）。
+- **`thinkingLevelMap.off` 保持字符串 `'off'`，`'none'` 两版透传**（`src/llm/adapter.ts` / `dropUnsupportedEffort`）：前者是选择器里 Off 档存在的唯一条件，后者是用户显式选择、不由适配层代删。
 
 ## 测试
 

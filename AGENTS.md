@@ -76,6 +76,13 @@
 
 ## 活跃坑
 
+- **`off` 只是选择器的档位名，不是 wire 拼写；两个端点都拒它**：`thinkingLevelMap.off` 必须是字符串
+  （`null` 会让 Off 从选择器消失），而 pi-ai 同时拿它当"未指定档位时自动发送的值"。上游对这个字面量
+  一律 400 / `11133`，国际版见 #49、国内版见 #13。所以 strip 挂在**两版共用**的 `prepareChatBody()`，
+  `chatStream()` 两个 region 都过一遍归一化 —— 别再把它挪回 region 分支，"CN 原样透传"正是 #13 的故障形态。
+  `'none'` 不替换、不删除（`gpt-6-astra` 拒它、`kimi-k2.8-preview` 收下却忽略）；`off` 也不进探测候选
+  （探测只能证明"收下"，证明不了"关掉了"）。判据与替代方案见
+  [.agents/notes/2026-10-20-off-effort-strip-both-regions.md](.agents/notes/2026-10-20-off-effort-strip-both-regions.md)。
 - **宿主版本可能与 devDeps 错位**：本仓 devDeps 锁在某个宿主编译，实际运行的宿主可能更新。
   改代码前先跑 `dsh --version` 对比 [package.json](package.json) 的 devDeps；错位可能导致编译通过但运行时崩。
   升级 devDeps 要同步决定 `engines.dsh` 的兼容范围。

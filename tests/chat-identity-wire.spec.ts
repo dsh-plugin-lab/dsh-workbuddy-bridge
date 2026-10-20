@@ -71,9 +71,14 @@ describe('chatStream identity', () => {
     expect(headers['X-Product']).toBe('SaaS')
     expect(headers['Authorization']).toBe('Bearer at')
     expect(headers['X-Refresh-Token']).toBeUndefined()
-    expect(init.body).toBe(
-      JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }),
-    )
+    // The body is normalized at this layer for both regions (issue #13), so the
+    // CN wire carries the forced `stream: true` rather than the caller's bytes.
+    // Nothing else is added: the payload keeps its model and messages as sent.
+    expect(JSON.parse(String(init.body))).toEqual({
+      model: 'm',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: true,
+    })
   })
 
   it('names the international product in the UA and still prepends the first system message', async () => {
