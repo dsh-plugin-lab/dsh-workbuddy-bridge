@@ -58,8 +58,25 @@ if (/\b(?:401|403)\b/.test(message)) return "AUTH";
 （`…\DeepSeek Harness\resources\app.asar`），零宽字符插进去会让模型拿到一个它看不出错的错误路径，
 工具调用必然失败。两条改写都带前后斜杠守卫。
 
-**三、只动 system / developer 消息。** 同一批实测里，固定句只出现在 user 消息里时上游放行；
-改写用户内容则是插件不该做的事。数组 content 只改 `type: "text"` 的部件，图片等部件逐字节不变。
+**三、改写 system / developer / assistant，绝不动 user 与 tool。**
+
+范围在 2026-10-22 修正过一次，两次的判据都要留在这里：
+
+- **初版只改 system / developer**：依据是"固定句只出现在 user 消息里时上游放行"。
+- **修正为再加 assistant**：CPA 渠道插件那一侧独立撞上同一个网关，
+  `mmqz/cpa-multi-plugins` [PR #49](https://github.com/mmqz/cpa-multi-plugins/pull/49) 的消融实验
+  （真实失败转储，50 消息 / 67 tools）显示**只改 system 仍然 400**，
+  触发点主要在 **assistant 历史回显**——一条 32 KB 压缩摘要含 42 处品牌串；
+  "所有角色 + 所有字段清零"才回到 200。本机独立复现：assistant 回显含品牌串 → 400 / `11128`，
+  扩到 assistant 后 → 200（见下文第二轮表格）。
+  ⚠️ 那个仓库**不是本仓的上游**，两者没有代码谱系：它产出 CPA 侧的 `workbuddy.dll`（由
+  `dsh-cpa-switch` 管理），本仓是独立的 DSH 插件，两侧各自修复同一现象。此处只引其证据。
+- **user 与 tool 仍排除**：那两类字节是模型推理的事实依据（用户自己的话、文件或命令真实返回的内容），
+  改写它们等于让转录与世界不一致，而 #49 的实测显示该网关并没有扫那里。
+- **assistant 的附加载体**：`reasoning_content` / `reasoning` 镜像与 `tool_calls[].function.arguments`
+  一并改写（都是模型自己生成的，参数串改写后仍必须能 `JSON.parse`），
+  这是为了不依赖"该网关只扫 content"这份会变的清单。
+- 数组 content 只改 `type: "text"` 的部件，图片等部件逐字节不变。
 
 **四、失败文案以 `displayMsg` 为准，非鉴权类不再带状态码**（`src/llm/shim.ts` 的 `failureMessage()`）：
 

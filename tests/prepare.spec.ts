@@ -205,6 +205,120 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
     expect(body.messages[1]!.content).toBe(OPENER)
   })
 
+  it('rewrites the assistant history echo, which is where a real request trips the filter', () => {
+    // Measured 2026-10-21 (ablation published as CPA-side PR mmqz/cpa-multi-plugins#49 —
+    // a sibling fix against the same gateway, not this repo's upstream): rewriting only
+    // `system` still answered 400; the phrases sat in the assistant echo — a compaction
+    // summary replayed as history. This is the case the earlier system-only scope missed.
+    const body = JSON.parse(
+      prepareChatBody(
+        JSON.stringify({
+          messages: [
+            { role: 'user', content: 'repeat after me' },
+            { role: 'assistant', content: OPENER },
+            { role: 'user', content: 'now say ok' },
+          ],
+        }),
+      ),
+    ) as { messages: { role: string; content: string }[] }
+    expect(body.messages[1]!.content).toBe('You are an AI agent.')
+    // The surrounding turns are untouched, including the user's own words.
+    expect(body.messages[0]!.content).toBe('repeat after me')
+    expect(body.messages[2]!.content).toBe('now say ok')
+  })
+
+  it('rewrites an assistant array-content text part and leaves non-text parts alone', () => {
+    const image = { type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } }
+    const body = JSON.parse(
+      prepareChatBody(
+        JSON.stringify({
+          messages: [
+            {
+              role: 'assistant',
+              content: [{ type: 'text', text: 'Powered by DeepSeek Harness.' }, image],
+            },
+          ],
+        }),
+      ),
+    ) as { messages: { content: Record<string, unknown>[] }[] }
+    const parts = body.messages[0]!.content
+    expect(parts[0]!['text']).toBe('Powered by DeepSeek\u200B Harness.')
+    expect(parts[1]).toEqual(image)
+  })
+
+  it('rewrites the assistant reasoning mirror and tool-call arguments', () => {
+    const body = JSON.parse(
+      prepareChatBody(
+        JSON.stringify({
+          messages: [
+            {
+              role: 'assistant',
+              content: '',
+              reasoning_content: 'I am powered by DeepSeek Harness.',
+              reasoning: 'I am powered by DeepSeek Harness.',
+              tool_calls: [
+                {
+                  id: 'call_1',
+                  type: 'function',
+                  function: {
+                    name: 'pwsh',
+                    arguments: '{"command":"dir","note":"DeepSeek Harness build"}',
+                  },
+                },
+              ],
+            },
+          ],
+        }),
+      ),
+    ) as {
+      messages: {
+        reasoning_content: string
+        reasoning: string
+        tool_calls: { function: { arguments: string } }[]
+      }[]
+    }
+    const message = body.messages[0]!
+    for (const text of [message.reasoning_content, message.reasoning]) {
+      expect(text).not.toContain('DeepSeek Harness')
+      expect(text).toContain('DeepSeek\u200B Harness')
+    }
+    const args = message.tool_calls[0]!.function.arguments
+    expect(args).not.toContain('DeepSeek Harness')
+    expect(args).toContain('DeepSeek\u200B Harness')
+    // The argument string must still be valid JSON with its other fields intact.
+    expect(JSON.parse(args)).toEqual({ command: 'dir', note: 'DeepSeek\u200B Harness build' })
+  })
+
+  it('keeps a real path inside a tool-call argument byte-identical', () => {
+    const argument = '{"path":"D:\\\\10_COD\\\\DeepSeek Harness\\\\resources\\\\app.asar"}'
+    const body = JSON.parse(
+      prepareChatBody(
+        JSON.stringify({
+          messages: [
+            {
+              role: 'assistant',
+              content: '',
+              tool_calls: [
+                { id: 'c', type: 'function', function: { name: 'read', arguments: argument } },
+              ],
+            },
+          ],
+        }),
+      ),
+    ) as { messages: { tool_calls: { function: { arguments: string } }[] }[] }
+    expect(body.messages[0]!.tool_calls[0]!.function.arguments).toBe(argument)
+  })
+
+  it('normalizes a tool message that also carries array text content', () => {
+    // `tool` is excluded by role, so even an array-shaped tool result keeps its
+    // bytes: it quotes what a file or command actually returned.
+    const content = [{ type: 'text', text: 'file.md: DeepSeek Harness is mentioned here' }]
+    const body = JSON.parse(
+      prepareChatBody(JSON.stringify({ messages: [{ role: 'tool', content }] })),
+    ) as { messages: { content: { text: string }[] }[] }
+    expect(body.messages[0]!.content[0]!.text).toBe('file.md: DeepSeek Harness is mentioned here')
+  })
+
   it('is idempotent, so the international layer may run the body twice', () => {
     const once = prepareChatBody(
       JSON.stringify({

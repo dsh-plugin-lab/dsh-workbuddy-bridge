@@ -432,12 +432,12 @@ export function prepareChatBody(source: string): string {
  * client signature.
  *
  * Measured 2026-10-21 on `copilot.tencent.com/v2/chat/completions`: a request
- * whose **system/developer** message carries the phrase `DeepSeek Harness`
- * answers `400` / `11128` "Illegal API invocation from an unapproved channel",
- * while the same account, headers and body with the phrase rewritten answers
- * 200. DSH injects exactly that phrase as the head of its system prompt
- * ("You are an AI agent powered by DeepSeek Harness."), so every request the
- * harness sends is affected; the official desktop app never sends it.
+ * whose message bodies carry the phrase `DeepSeek Harness` answers `400` /
+ * `11128` "Illegal API invocation from an unapproved channel", while the same
+ * account, headers and body with the phrase rewritten answers 200. DSH injects
+ * exactly that phrase as the head of its system prompt ("You are an AI agent
+ * powered by DeepSeek Harness."), so every request the harness sends is
+ * affected; the official desktop app never sends it.
  *
  * Two rewrites, in this order, because they solve different halves of it:
  *
@@ -456,10 +456,26 @@ export function prepareChatBody(source: string): string {
  * into a silently wrong path. Both rewrites anchor on the surrounding slashes
  * for that reason.
  *
- * Only `system` / `developer` messages are touched: the same measurement shows
- * user messages are not inspected, and rewriting user content would corrupt
- * data the plugin has no business editing. Idempotent — a second pass finds
- * neither the opener nor a bare phrase.
+ * **Roles covered** — `system`, `developer` and `assistant`; `user` and `tool`
+ * are left alone. Measured 2026-10-21 by ablation against the same gateway
+ * (independently reproduced on the CPA-plugin side and published as
+ * mmqz/cpa-multi-plugins PR #49 — a sibling fix, not this repo's upstream and
+ * not a dependency): the filter reads `system` and `assistant` bodies, and in
+ * that request the triggering phrases sat mostly in the **assistant history
+ * echo** — a 32 KB compaction summary carried 42 brand occurrences, and
+ * rewriting only `system` still answered 400. The same ablation found `user`
+ * text, tool results, tool definitions, `tool_calls` arguments and
+ * `reasoning_content` did not fire.
+ *
+ * This stays narrower than "every role" on purpose. The two excluded kinds are
+ * the ones whose bytes are ground truth for the model: user input is the user's
+ * own words, and a tool result is what a file or command actually returned.
+ * Rewriting either would make the transcript disagree with the world the model
+ * is reasoning about — a silent correctness bug traded for a filter that, per
+ * the measurement, is not looking there. If the filter later widens, that is a
+ * decision with fresh evidence, not something to pre-empt.
+ *
+ * Idempotent — a second pass finds neither the opener nor a bare phrase.
  */
 function neutralizeChannelSignature(obj: Record<string, unknown>): void {
   const messages = obj['messages']
@@ -467,18 +483,50 @@ function neutralizeChannelSignature(obj: Record<string, unknown>): void {
   for (const message of messages) {
     if (!isObject(message)) continue
     const role = message['role']
-    if (role !== 'system' && role !== 'developer') continue
-    const content = message['content']
-    if (typeof content === 'string') {
-      message['content'] = neutralizeSignatureText(content)
-      continue
-    }
-    if (!Array.isArray(content)) continue
-    for (const part of content) {
-      if (!isObject(part) || part['type'] !== 'text') continue
-      const text = part['text']
-      if (typeof text === 'string') part['text'] = neutralizeSignatureText(text)
-    }
+    // The two data roles: never rewrite what the user said or what a tool returned.
+    if (role === 'user' || role === 'tool') continue
+    neutralizeMessageText(message)
+    if (role === 'assistant') neutralizeAssistantExtras(message)
+  }
+}
+
+/** Rewrite a message's string `content`, or each text part of an array `content`. */
+function neutralizeMessageText(message: Record<string, unknown>): void {
+  const content = message['content']
+  if (typeof content === 'string') {
+    message['content'] = neutralizeSignatureText(content)
+    return
+  }
+  if (!Array.isArray(content)) return
+  for (const part of content) {
+    if (!isObject(part) || part['type'] !== 'text') continue
+    const text = part['text']
+    if (typeof text === 'string') part['text'] = neutralizeSignatureText(text)
+  }
+}
+
+/**
+ * Rewrite the assistant-only carriers that can reach the wire.
+ *
+ * `reasoning_content` / `reasoning` are the model's own thinking echoed back on
+ * a replayed assistant turn, and `tool_calls[].function.arguments` is a JSON
+ * string the model wrote earlier. Both are model-generated, so rewriting them
+ * keeps the transcript self-consistent, and the path guard still protects any
+ * real directory name quoted inside a tool argument.
+ */
+function neutralizeAssistantExtras(message: Record<string, unknown>): void {
+  for (const key of ['reasoning_content', 'reasoning']) {
+    const value = message[key]
+    if (typeof value === 'string') message[key] = neutralizeSignatureText(value)
+  }
+  const toolCalls = message['tool_calls']
+  if (!Array.isArray(toolCalls)) return
+  for (const call of toolCalls) {
+    if (!isObject(call)) continue
+    const fn = call['function']
+    if (!isObject(fn)) continue
+    const args = fn['arguments']
+    if (typeof args === 'string') fn['arguments'] = neutralizeSignatureText(args)
   }
 }
 

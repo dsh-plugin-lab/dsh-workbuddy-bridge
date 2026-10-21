@@ -195,7 +195,14 @@ src/
 
 ## 渠道签名：产品名是 wire 上的敏感串
 
-上游按**提示词内容**风控，不是按渠道。2026-10-21 实测：国内网关对 system/developer 消息里出现产品名 `DeepSeek Harness` 的请求回 400 / `11128`（`Illegal API invocation from an unapproved channel`），而把那一句改写后同一账号、同一请求头回 200。DSH 默认把 `You are an AI agent powered by DeepSeek Harness.` 当每个 system prompt 的开头注入，所以这条拦的是**所有** agent 请求，与是不是官方客户端无关——文案里的 "unapproved channel" 是误导。
+上游按**提示词内容**风控，不是按渠道。2026-10-21 实测：国内网关对消息正文里出现产品名 `DeepSeek Harness` 的请求回 400 / `11128`（`Illegal API invocation from an unapproved channel`），而把那些出现处改写后同一账号、同一请求头回 200。DSH 默认把 `You are an AI agent powered by DeepSeek Harness.` 当每个 system prompt 的开头注入，所以这条拦的是**所有** agent 请求，与是不是官方客户端无关——文案里的 "unapproved channel" 是误导。
+
+旁证（**不是本仓的上游，两者没有代码谱系**）：同一个腾讯网关也被 CPA 渠道插件那一侧独立撞上，
+`mmqz/cpa-multi-plugins` 的 [PR #49](https://github.com/mmqz/cpa-multi-plugins/pull/49) 用真实失败转储做了消融实验，
+给出两条本仓据此定范围的结论——(a) 只改 system 仍然 400，真实请求的触发点主要在 **assistant 历史回显**；
+(b) 该网关当时只扫 system 与 assistant 正文，user、tool 结果、`tools` 定义、`tool_calls` 参数、
+`reasoning_content` 均不触发。本仓仍改写后三者，见下文边界。跨仓引用只作证据，不构成依赖：
+本仓不加载、不管理那些 dll，两侧各自独立修复同一现象。
 
 于是 wire 边界（`prepareChatBody()` → `neutralizeChannelSignature()`，两版都过一遍）做两段改写：
 
@@ -207,7 +214,7 @@ src/
 三条不能顺手改的边界：
 
 - **路径语境一个字节都不改**（`…\DeepSeek Harness\…`、`…/DeepSeek Harness/…`）：真实目录名里就有这个词组，插进零宽字符会让模型拿到一个它看不出错的错误路径，工具调用必失败。两条改写都带前后斜杠守卫。
-- **只动 system / developer**：实测固定句只出现在 user 消息里时上游放行；改写用户内容不是插件该做的事。数组 content 只改 `type: "text"` 的部件。
+- **改写 system / developer / assistant，绝不动 user 与 tool**：只改 system 实测仍 400（触发点在 assistant 回显）；user 与 tool 被排除是刻意的——那两类字节是模型推理的事实依据（用户自己的话、文件或命令真实返回的内容），改写等于让转录与世界不一致，而实测该网关并没有在扫那里。assistant 的 `reasoning_content` / `reasoning` 镜像与 `tool_calls[].function.arguments` 一并改写（都是模型自己生成的，参数串仍必须能 `JSON.parse`）。数组 content 只改 `type: "text"` 的部件。
 - **幂等**：国际版层会二次调用共享层，第二遍必须不再命中（改写后既没有整句也没有裸词组）。
 
 ## 失败文案：状态码会被宿主当成鉴权结论
