@@ -201,6 +201,83 @@ describe('WorkBuddy shim', () => {
     expect(body.error.message).toContain('积分不足')
   })
 
+  it('reports the upstream display message instead of the raw JSON body', async () => {
+    // Measured 2026-10-21: a restricted account answers 403 / 11140 with a
+    // human-readable `displayMsg`. The host would otherwise show the whole
+    // document, which says nothing the user can act on.
+    const harness = await startShim(() => ({
+      ok: false,
+      status: 403,
+      kind: 'client',
+      message: JSON.stringify({
+        code: 11140,
+        msg: 'request illegal',
+        requestId: 'f30f9a08',
+        displayMsg: {
+          en: 'Your account has been restricted',
+          zh: '账号存在异常行为，已被限制使用',
+        },
+        displayTips: { zh: '如需申诉请提交反馈' },
+      }),
+    }))
+    const response = await fetch(`${harness.shim.baseUrl()}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${harness.shim.token()}`,
+      },
+      body: JSON.stringify({ model: 'hy3', messages: [] }),
+    })
+    const body = (await response.json()) as { error: { type: string; message: string } }
+    expect(response.status).toBe(400)
+    expect(body.error.message).toContain('账号存在异常行为，已被限制使用')
+    expect(body.error.message).not.toContain('requestId')
+  })
+
+  it('keeps 401/403 out of the message unless the failure really is an auth one', async () => {
+    // `dsh-llm-pi-ai` classifies by matching the message text — any mention of
+    // 401/403 becomes AUTH, and the chat UI then replaces the real reason with
+    // "API key is invalid". A rejected prompt or a restricted account must not
+    // be reported that way, so the status stays out of the text.
+    for (const failure of [
+      { status: 403, kind: 'client' as const, message: 'request illegal' },
+      { status: 429, kind: 'soft_rate' as const, message: 'usage exceeds frequency limit' },
+      { status: 402, kind: 'hard_credit' as const, message: '积分不足' },
+    ]) {
+      const harness = await startShim(() => ({ ok: false, ...failure }))
+      const response = await fetch(`${harness.shim.baseUrl()}/v1/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          authorization: `Bearer ${harness.shim.token()}`,
+        },
+        body: JSON.stringify({ model: 'hy3', messages: [] }),
+      })
+      const body = (await response.json()) as { error: { message: string } }
+      expect(body.error.message).not.toMatch(/\b(?:401|403)\b/)
+    }
+  })
+
+  it('keeps the status on a session_dead failure, where it is the actionable fact', async () => {
+    const harness = await startShim(() => ({
+      ok: false,
+      status: 401,
+      kind: 'session_dead',
+      message: 'Offline user session not found',
+    }))
+    const response = await fetch(`${harness.shim.baseUrl()}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${harness.shim.token()}`,
+      },
+      body: JSON.stringify({ model: 'hy3', messages: [] }),
+    })
+    expect(response.status).toBe(401)
+    const body = (await response.json()) as { error: { message: string } }
+    expect(body.error.message).toContain('http 401')
+  })
+
   it('answers unknown routes with 404', async () => {
     const harness = await startShim(() => ({
       ok: false,

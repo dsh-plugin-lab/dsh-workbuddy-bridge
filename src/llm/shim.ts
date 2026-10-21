@@ -24,6 +24,7 @@ import type { WorkBuddyCatalog } from '../catalog/index.ts'
 import { hostIsLoopback, originIsLoopback } from '../llm/loopback.ts'
 import {
   prepareChatBody,
+  upstreamDisplayMessage,
   WorkBuddyUpstreamClient,
   type UpstreamErrorKind,
 } from '../protocol/client.ts'
@@ -166,6 +167,34 @@ function writeOpenAIError(
   message: string,
 ): void {
   writeJson(res, status, { error: { message, type: kind, code: kind } })
+}
+
+/**
+ * The one-line reason a failed upstream request is reported with.
+ *
+ * The host does not read our HTTP status to classify a failure: `dsh-llm-pi-ai`
+ * matches the **message text** (`if (/\b(?:401|403)\b/.test(message)) return
+ * "AUTH"`), and the chat UI then replaces whatever we wrote with
+ * "API key is invalid". So a status may only appear here when the failure
+ * really is an authentication one; every other class keeps its digits out, or
+ * a restricted account or a rejected prompt reaches the user as a bad key.
+ *
+ * The upstream's own `displayMsg` wins over the raw body: it is the sentence
+ * written for a human ("账号存在异常行为，已被限制使用"), while the body is a JSON
+ * document whose `msg` is often a machine phrase such as `request illegal`.
+ */
+function failureMessage(result: {
+  status: number
+  kind: UpstreamErrorKind
+  message: string
+}): string {
+  const reason = upstreamDisplayMessage(result.message) ?? result.message.slice(0, 400)
+  const head = `workbuddy upstream ${result.kind}`
+  // `session_dead` is the one class where the status *is* the actionable fact
+  // (sign in again), and where the host's AUTH reading happens to be right.
+  return result.kind === 'session_dead'
+    ? `${head} (http ${result.status}): ${reason}`
+    : `${head}: ${reason}`
 }
 
 /** Read a request body with a size cap; over-limit bodies fail the request. */
@@ -312,12 +341,7 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     const result = await client.chatStream(credential, prepared, controller.signal)
 
     if (!result.ok) {
-      writeOpenAIError(
-        res,
-        KIND_STATUS[result.kind],
-        result.kind,
-        `workbuddy upstream ${result.kind} (http ${result.status}): ${result.message.slice(0, 400)}`,
-      )
+      writeOpenAIError(res, KIND_STATUS[result.kind], result.kind, failureMessage(result))
       return
     }
 
