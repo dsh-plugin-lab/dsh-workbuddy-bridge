@@ -40,10 +40,15 @@ export interface UpstreamFailure {
 const UPSTREAM_CODE_KINDS: Readonly<Record<string, UpstreamErrorKind>> = {
   // 会话已失效：App 里重新登录才能恢复。
   '12153': 'session_dead',
-  // 非法渠道调用（例如 developer 角色）：请求本身不被接受。
+  // 非法渠道调用（例如 developer 角色、system 以固定句开头）：请求本身不被接受。
   '11128': 'client',
   // 参数越界（例如 max_tokens 低于模型下限）。
   '11133': 'client',
+  // 账号被上游风控限制（2026-10-21 实测：`displayMsg.zh` 为「账号存在异常行为，
+  // 已被限制使用」，附 `SUBMIT_FEEDBACK` 申诉动作）。归 `client` 是刻意的：
+  // 它不是本机凭据失效，重登录与换 key 都无效，而 `session_dead` 会让宿主把
+  // 整轮失败显示成鉴权问题。
+  '11140': 'client',
 }
 
 /** 业务码 → 失败类别：信封 code 非 0 时的第一落点。 */
@@ -51,6 +56,7 @@ const ENVELOPE_CODE_KINDS: Readonly<Record<number, UpstreamErrorKind>> = {
   12153: 'session_dead',
   11128: 'client',
   11133: 'client',
+  11140: 'client',
 }
 
 /**
@@ -77,7 +83,42 @@ const TEXT_MARKERS: readonly (readonly [marker: string, kind: UpstreamErrorKind]
   ['12153', 'session_dead'],
   ['11128', 'client'],
   ['11133', 'client'],
+  ['11140', 'client'],
 ]
+
+/**
+ * 上游自己的、面向用户的文案：`displayMsg` 优先，其次是 `msg`。
+ *
+ * 上游把「真正该给人看的那句话」放在 `displayMsg` 里（分别给出 `zh` / `zh-hant` /
+ * `en` 三种拼写），而 `msg` 常常是一句机器可读的英文短语（`request illegal`）。
+ * 把 `displayMsg` 丢掉的代价不是"少一句说明"：`msg` 本身看不出是封号、限流还是
+ * 参数错，使用者只能看到一句无从下手的英文。
+ *
+ * 读取顺序固定在 `zh` → `zh-hant` → `en`：国内网关的 zh 文案是原始表述，en 是
+ * 它的译文；先中文，只有上游没给中文时才退回英文。
+ *
+ * @param body - 响应体原文。
+ * @returns 干净的、可直接展示的一行文案；读不出来返回 undefined。
+ */
+export function upstreamDisplayMessage(body: string): string | undefined {
+  const parsed = parseJson(body)
+  if (!isRecord(parsed)) return undefined
+  const display = parsed['displayMsg']
+  if (isRecord(display)) {
+    for (const key of ['zh', 'zh-hant', 'en']) {
+      const value = display[key]
+      if (typeof value === 'string' && value.trim() !== '') return value.trim()
+    }
+  }
+  const msg = parsed['msg']
+  if (typeof msg === 'string' && msg.trim() !== '') return msg.trim()
+  const extError = parsed['extError']
+  if (isRecord(extError)) {
+    const message = extError['message']
+    if (typeof message === 'string' && message.trim() !== '') return message.trim()
+  }
+  return undefined
+}
 
 /** 上游错误体：只取结构化字段，其余一概不看。 */
 const ErrorBody = z.object({
@@ -170,4 +211,9 @@ function parseJson(body: string): unknown {
   } catch {
     return undefined
   }
+}
+
+/** 是否是一个可按键读取的对象（数组与 null 都不算）。 */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }

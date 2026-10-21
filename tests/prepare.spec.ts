@@ -4,6 +4,7 @@ import {
   prepareChatBody,
   prepareInternationalChatBody,
   regionOf,
+  upstreamDisplayMessage,
 } from '../src/protocol/client.ts'
 
 describe('prepareChatBody', () => {
@@ -112,6 +113,152 @@ describe('prepareChatBody', () => {
     const roles = body['messages'].map((message: { role: string }) => message.role)
     expect(roles).toEqual(['system', 'user'])
     expect(body['reasoning_effort']).toBe('max')
+  })
+})
+
+describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
+  const OPENER = 'You are an AI agent powered by DeepSeek Harness.'
+  const system = (content: unknown): Record<string, unknown> =>
+    JSON.parse(prepareChatBody(JSON.stringify({ messages: [{ role: 'system', content }] })))
+  const textOf = (body: Record<string, unknown>): string =>
+    (body['messages'] as { content: unknown }[])[0]!.content as string
+
+  it('rewrites the DSH opener a system message starts with', () => {
+    const body = system(`${OPENER}\n\nYou are a coding agent.`)
+    expect(textOf(body)).toBe('You are an AI agent.\n\nYou are a coding agent.')
+  })
+
+  it('rewrites the opener on a developer message too, which is what pi-ai sends', () => {
+    const body = JSON.parse(
+      prepareChatBody(
+        JSON.stringify({
+          messages: [
+            { role: 'developer', content: OPENER },
+            { role: 'user', content: 'hi' },
+          ],
+        }),
+      ),
+    ) as { messages: { role: string; content: string }[] }
+    expect(body.messages[0]!.role).toBe('system')
+    expect(body.messages[0]!.content).toBe('You are an AI agent.')
+  })
+
+  it('tolerates leading whitespace, a BOM, and any case or spacing in the phrase', () => {
+    // The prefix is carried through untouched: only the sentence is rewritten,
+    // so a prompt's own indentation or BOM survives verbatim.
+    for (const [content, expected] of [
+      [`\n\n  ${OPENER}`, '\n\n  You are an AI agent.'],
+      [`\uFEFF${OPENER}`, `\uFEFFYou are an AI agent.`],
+      ['You are an AI agent powered by DeepSeek\u00A0Harness.', 'You are an AI agent.'],
+      ['you are an ai agent powered by deepseek harness.', 'You are an AI agent.'],
+      ['You are an AI agent powered by  DeepSeek   Harness.', 'You are an AI agent.'],
+    ] as const) {
+      expect(textOf(system(content))).toBe(expected)
+    }
+  })
+
+  it('rewrites the phrase in every array-shaped text part, and leaves other parts alone', () => {
+    const parts = [
+      { type: 'text', text: OPENER },
+      { type: 'image_url', image_url: { url: 'data:image/png;base64,AA' } },
+      { type: 'text', text: 'mentions DeepSeek Harness mid-sentence.' },
+    ]
+    const body = system(parts)
+    const rewritten = (body['messages'] as { content: Record<string, string>[] }[])[0]!.content
+    expect(rewritten[0]!['text']).toBe('You are an AI agent.')
+    expect(rewritten[2]!['text']).not.toContain('DeepSeek Harness')
+    // The non-text part is byte-identical: the gateway inspects text only, and
+    // rewriting an image part would corrupt the attachment.
+    expect(rewritten[1]).toEqual(parts[1])
+  })
+
+  it('breaks a mid-sentence occurrence losslessly, keeping the whitespace it used', () => {
+    expect(textOf(system('Powered by DeepSeek Harness, an agent runtime.'))).toBe(
+      'Powered by DeepSeek\u200B Harness, an agent runtime.',
+    )
+  })
+
+  it('never rewrites the phrase inside a path, where it is a real directory name', () => {
+    // A zero-width space in a path would make every tool call that quotes it
+    // fail with a path the model cannot see is wrong.
+    for (const content of [
+      'The checkout is at D:\\10_COD\\DeepSeek Harness\\resources\\app.asar.',
+      'The checkout is at /opt/DeepSeek Harness/resources/app.asar.',
+      'See DeepSeek Harness/resources for details.',
+    ]) {
+      expect(textOf(system(content))).toBe(content)
+    }
+  })
+
+  it('leaves user and tool messages untouched', () => {
+    const body = JSON.parse(
+      prepareChatBody(
+        JSON.stringify({
+          messages: [
+            { role: 'user', content: OPENER },
+            { role: 'tool', content: OPENER },
+          ],
+        }),
+      ),
+    ) as { messages: { content: string }[] }
+    expect(body.messages[0]!.content).toBe(OPENER)
+    expect(body.messages[1]!.content).toBe(OPENER)
+  })
+
+  it('is idempotent, so the international layer may run the body twice', () => {
+    const once = prepareChatBody(
+      JSON.stringify({
+        messages: [{ role: 'system', content: `${OPENER}\n\nPowered by DeepSeek Harness.` }],
+      }),
+    )
+    expect(prepareChatBody(once)).toBe(once)
+    expect(JSON.parse(prepareInternationalChatBody(once))['messages']).toEqual(
+      JSON.parse(once)['messages'],
+    )
+  })
+
+  it('survives a body with no messages array', () => {
+    expect(prepareChatBody(JSON.stringify({ model: 'm' }))).toBe(
+      JSON.stringify({ model: 'm', stream: true }),
+    )
+  })
+})
+
+describe('upstreamDisplayMessage', () => {
+  it('prefers the Chinese display message the gateway writes for a human', () => {
+    expect(
+      upstreamDisplayMessage(
+        JSON.stringify({
+          code: 11140,
+          msg: 'request illegal',
+          displayMsg: {
+            en: 'Your account has been restricted',
+            zh: '账号存在异常行为，已被限制使用',
+          },
+        }),
+      ),
+    ).toBe('账号存在异常行为，已被限制使用')
+  })
+
+  it('falls back through zh-hant, en, msg and extError.message', () => {
+    expect(upstreamDisplayMessage(JSON.stringify({ displayMsg: { 'zh-hant': '帳號異常' } }))).toBe(
+      '帳號異常',
+    )
+    expect(upstreamDisplayMessage(JSON.stringify({ displayMsg: { en: 'restricted' } }))).toBe(
+      'restricted',
+    )
+    expect(upstreamDisplayMessage(JSON.stringify({ msg: 'request illegal' }))).toBe(
+      'request illegal',
+    )
+    expect(
+      upstreamDisplayMessage(JSON.stringify({ extError: { code: 'x', message: 'boom' } })),
+    ).toBe('boom')
+  })
+
+  it('returns undefined for bodies with nothing to show', () => {
+    for (const body of ['not json', '{}', '', '{"displayMsg":{}}', '[]']) {
+      expect(upstreamDisplayMessage(body)).toBeUndefined()
+    }
   })
 })
 

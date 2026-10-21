@@ -109,6 +109,53 @@ describe('probeModel', () => {
     expect(outcome.validation).toBe('unknown')
   })
 
+  it('attributes the respelled generic rejection code to the effort via its param', async () => {
+    // The upstream replaced `invalid_reasoning_effort` with the generic
+    // `invalid_parameter_value`; the parameter name is what keeps that from
+    // being read as any other rejected field.
+    const generic = (param: string): ProbeAttempt => ({
+      status: 400,
+      streamed: false,
+      errorCode: 'invalid_parameter_value',
+      param,
+    })
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, ACCEPTED],
+      [SENTINEL, generic('reasoning.effort')],
+      ['low', ACCEPTED],
+      ['medium', generic('reasoning.effort')],
+      ['high', ACCEPTED],
+      ['xhigh', generic('reasoning.effort')],
+      ['max', ACCEPTED],
+    ])
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL })
+    expect(outcome.validation).toBe('validating')
+    expect(outcome.efforts).toEqual(['low', 'high', 'max'])
+  })
+
+  it('does not read the generic code on another param as an effort rejection', async () => {
+    // A rejected `max_tokens` shares the code. Treating it as an effort
+    // rejection would silently shrink the reported capability set.
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, ACCEPTED],
+      [
+        SENTINEL,
+        { status: 400, streamed: false, errorCode: 'invalid_parameter_value', param: 'max_tokens' },
+      ],
+    ])
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL })
+    expect(outcome.validation).toBe('unknown')
+  })
+
+  it('does not read the generic code without a param as an effort rejection', async () => {
+    const table = new Map<string | undefined, ProbeAttempt>([
+      [undefined, ACCEPTED],
+      [SENTINEL, { status: 400, streamed: false, errorCode: 'invalid_parameter_value' }],
+    ])
+    const outcome = await probeModel({ send: tableSender(table), sentinel: () => SENTINEL })
+    expect(outcome.validation).toBe('unknown')
+  })
+
   it('does not count a 200 without a stream as acceptance', async () => {
     const table = new Map<string | undefined, ProbeAttempt>([
       [undefined, { status: 200, streamed: false }],

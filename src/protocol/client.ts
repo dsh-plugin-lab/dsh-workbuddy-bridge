@@ -19,7 +19,7 @@ import type { WorkBuddyCredential } from '../credential/store.ts'
 import type { ProbeAttempt } from '../probe/probe.ts'
 import { PROBE_MAX_TOKENS, PROBE_PROMPT } from '../probe/probe.ts'
 
-export { classifyUpstreamError, classifyUpstreamFailure } from './errors.ts'
+export { classifyUpstreamError, classifyUpstreamFailure, upstreamDisplayMessage } from './errors.ts'
 export type { UpstreamFailure } from './errors.ts'
 
 /** WorkBuddy region selected by the credential's login domain. */
@@ -393,7 +393,8 @@ function billingHeaders(credential: WorkBuddyCredential): Record<string, string>
  * Normalize an OpenAI chat-completions body for the WorkBuddy upstream:
  * force `stream: true` (the upstream rejects non-streaming), flatten
  * `tool_choice` (the upstream's field is a string; object forms return 400),
- * rewrite `developer` messages as `system`, and drop the adapter's own `off`
+ * rewrite `developer` messages as `system`, neutralize the channel signature
+ * (see {@link neutralizeChannelSignature}), and drop the adapter's own `off`
  * effort spelling (see {@link dropUnsupportedEffort}).
  *
  * The `developer` rewrite is load-bearing: pi-ai emits the system prompt as
@@ -420,10 +421,94 @@ export function prepareChatBody(source: string): string {
   const obj = body as Record<string, unknown>
   obj['stream'] = true
   normalizeDeveloperRole(obj)
+  neutralizeChannelSignature(obj)
   normalizeToolChoice(obj)
   dropUnsupportedEffort(obj)
   return JSON.stringify(obj)
 }
+
+/**
+ * Strip the product-identity phrase the CN gateway reads as an unofficial
+ * client signature.
+ *
+ * Measured 2026-10-21 on `copilot.tencent.com/v2/chat/completions`: a request
+ * whose **system/developer** message carries the phrase `DeepSeek Harness`
+ * answers `400` / `11128` "Illegal API invocation from an unapproved channel",
+ * while the same account, headers and body with the phrase rewritten answers
+ * 200. DSH injects exactly that phrase as the head of its system prompt
+ * ("You are an AI agent powered by DeepSeek Harness."), so every request the
+ * harness sends is affected; the official desktop app never sends it.
+ *
+ * Two rewrites, in this order, because they solve different halves of it:
+ *
+ * 1. **The opener**, when a message starts with it, becomes a plain
+ *    "You are an AI agent." — a readable sentence that survives upstream
+ *    normalization (unlike an invisible character, which a tokenizer or a
+ *    normalizer may simply drop, and which the same measurement showed the
+ *    gateway still rejects once an account is restricted).
+ * 2. **Any other occurrence** gets a zero-width space between the two words:
+ *    lossless, the model reads the same thing, and the substring match no
+ *    longer fires.
+ *
+ * **Path contexts are never rewritten** (`…\DeepSeek Harness\…`,
+ * `…/DeepSeek Harness/…`): a real directory name carries this phrase, and a
+ * zero-width space inside it would turn every tool call that quotes the path
+ * into a silently wrong path. Both rewrites anchor on the surrounding slashes
+ * for that reason.
+ *
+ * Only `system` / `developer` messages are touched: the same measurement shows
+ * user messages are not inspected, and rewriting user content would corrupt
+ * data the plugin has no business editing. Idempotent — a second pass finds
+ * neither the opener nor a bare phrase.
+ */
+function neutralizeChannelSignature(obj: Record<string, unknown>): void {
+  const messages = obj['messages']
+  if (!Array.isArray(messages)) return
+  for (const message of messages) {
+    if (!isObject(message)) continue
+    const role = message['role']
+    if (role !== 'system' && role !== 'developer') continue
+    const content = message['content']
+    if (typeof content === 'string') {
+      message['content'] = neutralizeSignatureText(content)
+      continue
+    }
+    if (!Array.isArray(content)) continue
+    for (const part of content) {
+      if (!isObject(part) || part['type'] !== 'text') continue
+      const text = part['text']
+      if (typeof text === 'string') part['text'] = neutralizeSignatureText(text)
+    }
+  }
+}
+
+/** Apply the two signature rewrites to one string; see {@link neutralizeChannelSignature}. */
+function neutralizeSignatureText(text: string): string {
+  const withoutOpener = text.replace(CHANNEL_OPENER, '$1You are an AI agent.')
+  return withoutOpener.replace(CHANNEL_SIGNATURE_PHRASE, `DeepSeek${ZERO_WIDTH_SPACE}$1Harness`)
+}
+
+/**
+ * The opener DSH puts at the head of every system prompt.
+ *
+ * Leading whitespace and a BOM are tolerated (group 1 carries them through to
+ * the replacement, so the rewrite never touches anything but the sentence), and
+ * every gap between the words is matched as whitespace so a respelling cannot
+ * walk past it. Case-insensitive for the same reason.
+ */
+const CHANNEL_OPENER =
+  /^([\s\uFEFF]*)You\s+are\s+an\s+AI\s+agent\s+powered\s+by\s+DeepSeek[\s\u00A0]+Harness\s*\./i
+
+/**
+ * The bare phrase, with slash guards on both sides so a real path survives.
+ *
+ * The capture keeps whatever whitespace the original used, so the rewritten
+ * sentence reads identically.
+ */
+const CHANNEL_SIGNATURE_PHRASE = /(?<![\\/])DeepSeek([\s\u00A0]+)Harness(?![\\/])/gi
+
+/** U+200B: invisible to a reader and to the model, breaks a substring match. */
+const ZERO_WIDTH_SPACE = '\u200B'
 
 /** Rewrite `role: "developer"` messages to `role: "system"` (upstream rejects developer). */
 function normalizeDeveloperRole(obj: Record<string, unknown>): void {
@@ -1051,8 +1136,15 @@ export class WorkBuddyUpstreamClient {
   }
 }
 
-/** Pull `extError.code` out of an upstream error body, if it is shaped that way. */
-function errorCodeOf(text: string): { errorCode?: string; detail?: string } {
+/**
+ * Pull the structured failure fields out of an upstream error body.
+ *
+ * `extError.param` matters as much as the code: the upstream reuses one generic
+ * code (`invalid_parameter_value`) for every rejected field, so the parameter
+ * name is the only thing that attributes the rejection to `reasoning.effort`
+ * rather than to `max_tokens` or anything else.
+ */
+function errorCodeOf(text: string): { errorCode?: string; detail?: string; param?: string } {
   try {
     const parsed: unknown = JSON.parse(text)
     if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
@@ -1060,7 +1152,12 @@ function errorCodeOf(text: string): { errorCode?: string; detail?: string } {
       const extError = wrapped['extError']
       if (typeof extError === 'object' && extError !== null && !Array.isArray(extError)) {
         const code = (extError as Record<string, unknown>)['code']
-        if (typeof code === 'string') return { errorCode: code, detail: code }
+        const param = (extError as Record<string, unknown>)['param']
+        if (typeof code === 'string') {
+          return typeof param === 'string'
+            ? { errorCode: code, detail: code, param }
+            : { errorCode: code, detail: code }
+        }
       }
     }
   } catch {

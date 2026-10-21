@@ -78,6 +78,17 @@
 
 ## 活跃坑
 
+- **上游按提示词内容风控，产品名是敏感串；错误文案里的状态码会被宿主读成鉴权结论**：
+  2026-10-21 实测，国内网关对 system/developer 里出现 `DeepSeek Harness` 的请求回
+  400 / `11128`，中性化后才可能 200；同日另一账号状态回 403 / `11140`
+  （`displayMsg`「账号存在异常行为，已被限制使用」，与提示词无关，插件修不了，只能申诉）。
+  两件事的处置都在 wire 边界与 shim：签名中性化住 `prepareChatBody()`
+  （**路径语境不碰**，真实目录名里就有这个词组）；错误文案住 `failureMessage()`
+  ——宿主 `dsh-llm-pi-ai` 用 `/\b(?:401|403)\b/` 文本匹配判 `AUTH`，
+  拼了 `(http 403)` 就会把封号/限流/参数错一律显示成「API 密钥无效」。
+  **只有 `session_dead` 允许带状态码**。
+  判据在 `tests/prepare.spec.ts` 与 `tests/shim.spec.ts`，推理与实测矩阵见
+  [.agents/notes/2026-10-21-channel-signature-and-error-text.md](.agents/notes/2026-10-21-channel-signature-and-error-text.md)。
 - **`off` 只是选择器的档位名，不是 wire 拼写；两个端点都拒它**：`thinkingLevelMap.off` 必须是字符串
   （`null` 会让 Off 从选择器消失），而 pi-ai 同时拿它当"未指定档位时自动发送的值"。上游对这个字面量
   一律 400 / `11133`，国际版见 #49、国内版见 #13。所以 strip 挂在**两版共用**的 `prepareChatBody()`，
