@@ -66,6 +66,13 @@ export interface ProbeAttempt {
   streamed: boolean
   /** `extError.code` from a JSON error body, when present. */
   errorCode?: string
+  /**
+   * `extError.param` from the same body.
+   *
+   * Load-bearing since the upstream started reusing one generic rejection code
+   * for every field: it is what attributes the rejection to the effort value.
+   */
+  param?: string
   /** Free-form detail for logs; never shown as a capability claim. */
   detail?: string
 }
@@ -80,16 +87,33 @@ export type ProbeOutcome =
   | { validation: 'unknown'; efforts: readonly []; requests: number; reason: string }
 
 /**
- * The upstream's "this effort value is not supported" code, measured
- * 2026-09-11 (plan §4.2). It is *not* treated as a permanent protocol promise:
- * anything unrecognized degrades to `unknown` rather than to a capability
- * conclusion.
+ * The upstream's "this effort value is not supported" code.
+ *
+ * Measured 2026-09-11 (plan §4.2) as `invalid_reasoning_effort`. It is *not* a
+ * permanent protocol promise: the upstream has since respelled it to the
+ * generic `invalid_parameter_value` on both endpoints, which is why that
+ * spelling is recognized too. Anything unrecognized still degrades to
+ * `unknown` rather than to a capability conclusion.
  */
 const INVALID_EFFORT_CODE = 'invalid_reasoning_effort'
 
+/**
+ * Generic rejection code the upstream now uses for every bad field.
+ *
+ * Because it names no field, a body carrying it is only attributed to the
+ * effort when `extError.param` points at the effort; otherwise a rejected
+ * `max_tokens` would be misread as "this level is unsupported" and shrink the
+ * reported capability set.
+ */
+const GENERIC_INVALID_CODE = 'invalid_parameter_value'
+
 /** Whether an attempt is an attributable rejection of the effort value. */
 function isEffortRejection(attempt: ProbeAttempt): boolean {
-  return attempt.status === 400 && attempt.errorCode === INVALID_EFFORT_CODE
+  if (attempt.status !== 400) return false
+  const code = attempt.errorCode
+  if (code === INVALID_EFFORT_CODE) return true
+  if (code !== GENERIC_INVALID_CODE) return false
+  return (attempt.param ?? '').toLowerCase().includes('effort')
 }
 
 /** Whether an attempt shows the upstream accepted the request and streamed. */
