@@ -222,3 +222,44 @@ describe('unchanged paths (regression pin)', () => {
     expect((init.headers as Record<string, string>)['User-Agent']).toBeUndefined()
   })
 })
+
+describe('intl channel identity headers (issue #21)', () => {
+  const TRACE_ID = /^[0-9a-f]{32}$/
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+  const QUINTET = [
+    'X-Request-ID',
+    'X-Conversation-ID',
+    'X-Conversation-Request-ID',
+    'X-Conversation-Message-ID',
+  ] as const
+
+  it('sends the trace/conversation quintet on global chat requests', async () => {
+    const wire = captureFetch('{}')
+    const result = await client().chatStream(
+      GLOBAL,
+      JSON.stringify({ model: 'm', messages: [{ role: 'user', content: 'hi' }] }),
+    )
+    expect(result.ok).toBe(true)
+    const headers = (wire.last()[1].headers ?? {}) as Record<string, string>
+    expect(headers['X-Trace-ID']).toMatch(TRACE_ID)
+    for (const name of QUINTET) expect(headers[name]).toMatch(UUID)
+  })
+
+  it('mints fresh ids per request, not one set reused across calls', async () => {
+    const first = captureFetch('{}')
+    await client().chatStream(GLOBAL, JSON.stringify({ model: 'm', messages: [] }))
+    const h1 = (first.last()[1].headers ?? {}) as Record<string, string>
+    const second = captureFetch('{}')
+    await client().chatStream(GLOBAL, JSON.stringify({ model: 'm', messages: [] }))
+    const h2 = (second.last()[1].headers ?? {}) as Record<string, string>
+    expect(h1['X-Conversation-ID']).not.toBe(h2['X-Conversation-ID'])
+  })
+
+  it('keeps the CN wire free of the quintet', async () => {
+    const wire = captureFetch('{}')
+    await client().chatStream(CN, JSON.stringify({ model: 'm', messages: [] }))
+    const headers = (wire.last()[1].headers ?? {}) as Record<string, string>
+    expect(headers['X-Trace-ID']).toBeUndefined()
+    for (const name of QUINTET) expect(headers[name]).toBeUndefined()
+  })
+})
