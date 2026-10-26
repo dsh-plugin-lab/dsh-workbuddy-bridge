@@ -7,7 +7,8 @@
 - auth.spec.ts
 - catalog-lifecycle.spec.ts
 - catalog-store.spec.ts
-- chat-identity-wire.spec.ts
+- chat-identity-wire.spec.ts —— chat / probe 的身份头硬编码在 wire 上（UA 形态、共享头族逐字节不变），
+  以及国际版渠道身份头组：五头形态、每请求重新生成、`X-Trace-ID` 反 UUID、CN 无五头
 - client-identity.spec.ts
 - credit-log.spec.ts
 - credit-route.spec.ts

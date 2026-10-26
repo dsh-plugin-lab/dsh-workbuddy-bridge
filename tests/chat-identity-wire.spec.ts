@@ -255,6 +255,18 @@ describe('intl channel identity headers (issue #21)', () => {
     expect(h1['X-Conversation-ID']).not.toBe(h2['X-Conversation-ID'])
   })
 
+  it('keeps the trace id a bare 32-hex id, never a UUID', async () => {
+    // 反向守卫，不是对当前形状的复述：网关最可能收紧的正是 trace-id 的格式细节，
+    // 而"把五个 id 统一到同一个 UUID helper"是最自然的重构方向。真发生时，
+    // 上面的 TRACE_ID 正则会以一条很难读懂的失败盖住原因 —— 这条先把话说清楚。
+    const wire = captureFetch('{}')
+    await client().chatStream(GLOBAL, JSON.stringify({ model: 'm', messages: [] }))
+    const traceId = ((wire.last()[1].headers ?? {}) as Record<string, string>)['X-Trace-ID'] ?? ''
+    expect(traceId).not.toMatch(UUID)
+    expect(traceId).not.toContain('-')
+    expect(traceId).toHaveLength(32)
+  })
+
   it('keeps the CN wire free of the quintet', async () => {
     const wire = captureFetch('{}')
     await client().chatStream(CN, JSON.stringify({ model: 'm', messages: [] }))
