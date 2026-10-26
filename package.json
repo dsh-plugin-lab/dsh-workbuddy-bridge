@@ -138,7 +138,7 @@
     "@types/react": "~18.3.1",
     "@types/react-dom": "^18.3.7",
     "@types/react-test-renderer": "^18.3.1",
-    "@vitest/coverage-v8": "^4.1.11",
+    "@vitest/coverage-v8": "^4.1.12",
     "anser": "^2.3.5",
     "clsx": "^2.1.1",
     "diff": "^9.0.0",
@@ -169,7 +169,7 @@
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.70.1",
     "unrun": "^0.3.1",
-    "vitest": "^4.1.11",
+    "vitest": "^4.1.12",
     "zustand": "^5.0.15"
   }
 }
