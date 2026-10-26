@@ -40,7 +40,9 @@ export interface UpstreamFailure {
 const UPSTREAM_CODE_KINDS: Readonly<Record<string, UpstreamErrorKind>> = {
   // 会话已失效：App 里重新登录才能恢复。
   '12153': 'session_dead',
-  // 非法渠道调用（例如 developer 角色、system 以固定句开头）：请求本身不被接受。
+  // 非法渠道调用：两个端点各有一套成因，见 docs/ARCHITECTURE.md「11128 有两个来源」。
+  // CN 侧是正文里的产品名（developer 角色、system 以固定句开头）；国际版侧是 chat
+  // 请求缺 trace / conversation 身份头组（issue #21 / PR #22），与正文无关。
   '11128': 'client',
   // 参数越界（例如 max_tokens 低于模型下限）。
   '11133': 'client',

@@ -193,9 +193,20 @@ src/
 - **`off` 不进探测候选**（`PROBE_EFFORT_CANDIDATES`）：探测只能证明"上游收下这个拼写"，证明不了"思考被关掉了"，而"接受 ≠ 生效"是本仓探测系统的第一条原则。
 - **不要按模型写死映射**：同一个拼写在三家供应商后面有三种现实，静态快照必过期（判据与先例见[归档记录](archive/reasoning-effort-off-wire-issue-49-2026-09-23.md)与[决策记录](../.agents/notes/2026-10-20-off-effort-strip-both-regions.md)）。
 
-## 渠道签名：产品名是 wire 上的敏感串
+## `11128` 有两个来源：正文里的产品名，与渠道身份头
 
-上游按**提示词内容**风控，不是按渠道。2026-10-21 实测：国内网关对消息正文里出现产品名 `DeepSeek Harness` 的请求回 400 / `11128`（`Illegal API invocation from an unapproved channel`），而把那些出现处改写后同一账号、同一请求头回 200。DSH 默认把 `You are an AI agent powered by DeepSeek Harness.` 当每个 system prompt 的开头注入，所以这条拦的是**所有** agent 请求，与是不是官方客户端无关——文案里的 "unapproved channel" 是误导。
+两条链路都会回 `11128`（`request illegal`），但成因与修复完全不同。**排查时先分清是哪一条**，把它一律当成「提示词内容风控」会走向错误的修复方向。
+
+| 端点 | 触发条件 | 修复位置 |
+|---|---|---|
+| 国内版 | 消息正文出现产品名 `DeepSeek Harness` | `neutralizeChannelSignature()` |
+| 国际版 | chat 请求缺 trace / conversation 身份头组，**与正文无关** | `channelIdentityHeaders()` |
+
+两条都带一句看着像推销的 `displayTips`，但**国际版说「渠道校验」是真的**：2026-10-23 起国际网关确实在校验客户端身份，而 CN 那条的 "unapproved channel" 才是误导。
+
+### 正文风控：产品名是 wire 上的敏感串（CN 侧）
+
+上游按**提示词内容**风控。2026-10-21 实测：国内网关对消息正文里出现产品名 `DeepSeek Harness` 的请求回 400 / `11128`（`Illegal API invocation from an unapproved channel`），而把那些出现处改写后同一账号、同一请求头回 200。DSH 默认把 `You are an AI agent powered by DeepSeek Harness.` 当每个 system prompt 的开头注入，所以这条拦的是**所有** agent 请求，与是不是官方客户端无关——文案里的 "unapproved channel" 是误导。
 
 旁证（**不是本仓的上游，两者没有代码谱系**）：同一个腾讯网关也被 CPA 渠道插件那一侧独立撞上，
 `mmqz/cpa-multi-plugins` 的 [PR #49](https://github.com/mmqz/cpa-multi-plugins/pull/49) 用真实失败转储做了消融实验，
@@ -216,6 +227,29 @@ src/
 - **路径语境一个字节都不改**（`…\DeepSeek Harness\…`、`…/DeepSeek Harness/…`）：真实目录名里就有这个词组，插进零宽字符会让模型拿到一个它看不出错的错误路径，工具调用必失败。两条改写都带前后斜杠守卫。
 - **改写 system / developer / assistant，绝不动 user 与 tool**：只改 system 实测仍 400（触发点在 assistant 回显）；user 与 tool 被排除是刻意的——那两类字节是模型推理的事实依据（用户自己的话、文件或命令真实返回的内容），改写等于让转录与世界不一致，而实测该网关并没有在扫那里。assistant 的 `reasoning_content` / `reasoning` 镜像与 `tool_calls[].function.arguments` 一并改写（都是模型自己生成的，参数串仍必须能 `JSON.parse`）。数组 content 只改 `type: "text"` 的部件。
 - **幂等**：国际版层会二次调用共享层，第二遍必须不再命中（改写后既没有整句也没有裸词组）。
+
+### 渠道身份：国际版要求 trace / conversation 头组
+
+2026-10-23 起，国际网关（`www.workbuddy.ai/v2/chat/completions`）对 chat 请求做**渠道校验**：同账号、同凭证、同 UA、同 body，缺下面这五个头就回 400 / `11128`，补上即 `200` SSE（[issue #21](https://github.com/dsh-plugin-lab/dsh-workbuddy-bridge/issues/21)，[PR #22](https://github.com/dsh-plugin-lab/dsh-workbuddy-bridge/pull/22)）。
+
+| 头 | 形态 |
+|---|---|
+| `X-Trace-ID` | 32 位小写 hex（OTel trace-id） |
+| `X-Request-ID` | v4 UUID |
+| `X-Conversation-ID` | v4 UUID |
+| `X-Conversation-Request-ID` | v4 UUID |
+| `X-Conversation-Message-ID` | v4 UUID |
+
+`chatHeaders()` 经 `channelIdentityHeaders()` **每请求现生成**，与官方桌面端一致。
+
+四条不能顺手改的边界：
+
+- **只有 global 注入，CN 逐字节不变**：`regionOf(credential.domain) === 'global'` 是唯一条件，同一判据 `chatBase()` 也在用。CN 现状实测 `200`，不冒进。
+- **不是在正文里找原因**：这条链路的 `11128` 与消息内容无关——干净最小请求同样被拒。反过来，`neutralizeChannelSignature()` 修不了它，别把两件事混成一条。
+- **`X-Trace-ID` 不是 UUID**，另外四个才是。独立复现（2026-10-24）显示只发三个 `X-Conversation-*` 当前也能过，但**没有据此收窄**：网关最可能收紧的正是 trace-id 格式，届时最小集又会坏掉。
+- **`probeEffort()` 共用 `chatHeaders()`**，所以这条链路修好后，国际版的推理档位探测从「静默 `unknown` / `efforts: []`」一并恢复。它是同一次修复的副作用，不是另一件事。
+
+判据在 `tests/chat-identity-wire.spec.ts`（五头形态 / 每请求不复用 / CN 无五头）。
 
 ## 失败文案：状态码会被宿主当成鉴权结论
 
@@ -238,6 +272,7 @@ src/
 - **探测记录的账号归属**：每条观测绑定产生它的账号，切换账号后旧账号的观测不消失（留在盘上）但不再被读出。
 - **默认档位必须是档位集成员**（`resolveDefaultEffort`，`src/probe/efforts.ts`）：报一个档位集之外的档位，会让每个省略档位的请求以 `UNSUPPORTED_REASONING_EFFORT` 失败——判据的"集合内兜底"（声明优先 → `high` → 集合首项）不是实现细节，是用户可感知行为的契约。
 - **`chatStream` 对两个 region 都做请求体归一化**（`src/protocol/client.ts`）：`off` 的 strip 与渠道签名中性化都住在共享层，region 只决定国际版额外补的首条 `system` 消息。改成"CN 原样透传"会让国内版重新把 `off` 与固定句发到 wire 上（issue #13 与 2026-10-21 的 `11128` 都是这个故障形态）。
+- **渠道身份头组只注入 global**（`src/protocol/client.ts` 的 `channelIdentityHeaders()`）：判据必须是 `regionOf(credential.domain) === 'global'`——与 `chatBase()` 同一个。顺手"两版统一"会让 CN 的 wire 不再逐字节等于今天实测通过的那个形态，而 CN 从没被要求带这组头。
 - **错误文本里不得出现 `401` / `403`，除非失败真是鉴权类**（`src/llm/shim.ts` 的 `failureMessage()`）：宿主按文本分类，`AUTH` 会覆盖掉真实原因。判据在 `tests/shim.spec.ts`。
 - **`thinkingLevelMap.off` 保持字符串 `'off'`，`'none'` 两版透传**（`src/llm/adapter.ts` / `dropUnsupportedEffort`）：前者是选择器里 Off 档存在的唯一条件，后者是用户显式选择、不由适配层代删。
 
