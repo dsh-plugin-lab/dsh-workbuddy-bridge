@@ -17,7 +17,7 @@
    - `node scripts/live-e2e.mjs` —— 适配器 → pi-ai → shim → 真实上游的端到端，用本机登录态。依赖 `lib/` 产物，**先 build**。
    - `node scripts/client-identity-live-matrix.mjs` —— 客户端身份真实矩阵，各 case 各打各的判定。同样依赖 `lib/`，先 build。
    - `node scripts/issue-48-forced-fallback-e2e.mjs` —— macOS 强制 fallback 真链（真 `mdfind` / `plutil` / helper spawn）。
-     **未跑之前，Release notes 不得声称 macOS 自动发现"已验证"**（判据：[archive/issue-48-electron-path-plan.md](archive/issue-48-electron-path-plan.md) §9.2-A）。
+     **未跑之前，对外一律不得声称 macOS 自动发现"已验证"**（Release notes 与 issue / PR 评论同受此限；判据：[archive/issue-48-electron-path-plan.md](archive/issue-48-electron-path-plan.md) §9.2-A）。
 
    这三条进不了 CI 是平台事实（见 [ci.yml](../.github/workflows/ci.yml) 的矩阵注释），所以它们只有在**这份清单里**才算数。
 
@@ -129,5 +129,6 @@
 
 ## 出事之后
 
-- **发布后才发现缺陷**：不删版本、不重发同号（npm 版本号不可覆盖）。修好 → 按上面流程发下一个 patch，并在 Release notes 里写明影响面。
+- **发布后才发现缺陷**：不删版本、不重发同号（npm 版本号不可覆盖）。修好 → 按上面流程发下一个 patch，影响面写在**对应的 issue / PR 评论**里（Release notes 保持 drafter 原文，见下条）。
+- **Release notes 就是 drafter 原文，不改写**：草稿只机械罗列 PR 标题，那就是发版说明该有的样子。正文装不下的东西——真机跑过哪些 case、用户可感知的语义变化、需要受影响用户回验——写在 **issue / PR 评论**里，一条一主题。常设规则与理由见根 [AGENTS.md](../AGENTS.md) 的「待办」。
 - **发布流程本身出问题**（bump 漏改三处之一、产物没重建）：先 `pnpm check` 复现，再按 [docs/archive/](archive/) 里同类记录的方式补一条决策记录。
