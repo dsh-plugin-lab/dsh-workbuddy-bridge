@@ -7,6 +7,7 @@
  * @module dsh-workbuddy-bridge/upstream
  */
 
+import { randomBytes } from 'node:crypto'
 import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
 import {
   chatUserAgent,
@@ -336,6 +337,38 @@ function commonHeaders(credential: WorkBuddyCredential): Record<string, string> 
 }
 
 /**
+ * Per-request channel identity headers the international gateway verifies.
+ *
+ * Measured 2026-10-23 against `www.workbuddy.ai/v2/chat/completions`: the same
+ * account, credential, UA and body answer `400` / `11128` ("request illegal",
+ * channel verification) without these headers, and `200` SSE with them. The
+ * official desktop app sends this trace/conversation quintet on every chat
+ * request; the CN gateway accepts requests without it, so the injection stays
+ * global-region-only to keep the CN wire byte-identical to what passes today.
+ *
+ * `X-Trace-ID` carries a bare 32-hex id (the OTel trace-id form the app uses);
+ * the other four are UUIDs minted per request, exactly like the app does.
+ */
+function channelIdentityHeaders(): Record<string, string> {
+  const uuid = () => {
+    const b = randomBytes(16)
+    const b6 = b[6] ?? 0
+    const b8 = b[8] ?? 0
+    b[6] = (b6 & 0x0f) | 0x40
+    b[8] = (b8 & 0x3f) | 0x80
+    const h = b.toString('hex')
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`
+  }
+  return {
+    'X-Trace-ID': randomBytes(16).toString('hex'),
+    'X-Request-ID': uuid(),
+    'X-Conversation-ID': uuid(),
+    'X-Conversation-Request-ID': uuid(),
+    'X-Conversation-Message-ID': uuid(),
+  }
+}
+
+/**
  * Chat request headers, including the X-No-* conventions the official CLI uses.
  *
  * `userAgent` carries the desktop identity for chat and probe requests; when
@@ -356,6 +389,9 @@ function chatHeaders(credential: WorkBuddyCredential, userAgent?: string): Recor
       ? { 'X-No-Department-Info': '1' }
       : { 'X-Domain': credential.domain }),
     'X-Product': 'SaaS',
+    // Intl channel verification rejects requests missing the trace/conversation
+    // identity quintet (400/11128); CN accepts without it, so stay conditional.
+    ...(regionOf(credential.domain) === 'global' ? channelIdentityHeaders() : {}),
   }
   return headers
 }
