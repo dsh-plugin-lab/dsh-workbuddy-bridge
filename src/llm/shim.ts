@@ -23,6 +23,7 @@ import type { WorkBuddyCredentialStore } from '../credential/store.ts'
 import type { WorkBuddyCatalog } from '../catalog/index.ts'
 import { hostIsLoopback, originIsLoopback } from '../llm/loopback.ts'
 import {
+  isChannelGateBody,
   prepareChatBody,
   upstreamDisplayMessage,
   WorkBuddyUpstreamClient,
@@ -151,6 +152,18 @@ const KIND_STATUS: Readonly<Record<UpstreamErrorKind, number>> = {
   client: 400,
 }
 
+/**
+ * What to do when the gateway refuses a request on content (code `11-128`).
+ *
+ * Two actions only, and the copy keeps the code spelled `11-128` so that the
+ * guidance itself, echoed back into a later request, cannot re-arm the gate.
+ * No status digits (see {@link failureMessage}) and no retry advice: retrying
+ * the same poisoned conversation reproduces the refusal.
+ */
+const CHANNEL_GATE_HINT =
+  ' — 渠道校验拦截（11-128）。请新开会话重试；若持续出现，先更新插件' +
+  ' / blocked by channel verification (11-128): start a new conversation, and update the plugin if it persists'
+
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
   res.writeHead(status, {
@@ -182,6 +195,12 @@ function writeOpenAIError(
  * The upstream's own `displayMsg` wins over the raw body: it is the sentence
  * written for a human ("账号存在异常行为，已被限制使用"), while the body is a JSON
  * document whose `msg` is often a machine phrase such as `request illegal`.
+ *
+ * The channel-gate code (`11-128`) appends {@link CHANNEL_GATE_HINT}: its raw
+ * body is `{"message":"请求被拦截，请重新发送","type":"client","code":"client"}`,
+ * which on its own reads as a transient hiccup the user should simply retry —
+ * the two actions that actually help (a new conversation; update the plugin)
+ * are not guessable from it.
  */
 function failureMessage(result: {
   status: number
@@ -192,13 +211,16 @@ function failureMessage(result: {
   const head = `workbuddy upstream ${result.kind}`
   // `session_dead` is the one class where the status *is* the actionable fact
   // (sign in again), and where the host's AUTH reading happens to be right.
-  return result.kind === 'session_dead'
-    ? `${head} (http ${result.status}): ${reason}`
-    : `${head}: ${reason}`
+  const line =
+    result.kind === 'session_dead'
+      ? `${head} (http ${result.status}): ${reason}`
+      : `${head}: ${reason}`
+  return isChannelGateBody(result.message) ? `${line}${CHANNEL_GATE_HINT}` : line
 }
 
-/** Read a request body with a size cap; over-limit bodies fail the request. */
-function readBody(req: IncomingMessage): Promise<Buffer> {
+/** Read a request body with a size cap; over-limit bodies fail the request. */ function readBody(
+  req: IncomingMessage,
+): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = []
     let size = 0

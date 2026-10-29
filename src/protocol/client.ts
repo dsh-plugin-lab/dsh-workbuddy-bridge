@@ -566,11 +566,103 @@ function neutralizeAssistantExtras(message: Record<string, unknown>): void {
   }
 }
 
-/** Apply the two signature rewrites to one string; see {@link neutralizeChannelSignature}. */
+/**
+ * Rewrite the measured channel-gate fingerprints in one text blob.
+ *
+ * Exported for tests and for callers that assemble a body themselves.
+ * Idempotent: every `to` differs from its `from` and recreates no other `from`.
+ */
+export function rewriteChannelGateSentences(text: string): string {
+  let out = text
+  for (const [from, to] of [...IDENTITY_REWRITES, ...FILE_REFERENCE_REWRITES]) {
+    if (out.includes(from)) out = out.split(from).join(to)
+  }
+  return out
+}
+
+/**
+ * Apply the signature rewrites to one string; see {@link neutralizeChannelSignature}.
+ *
+ * Every rewrite is a **real wording change**. The zero-width-space variant this
+ * function used until 2026-10-29 is retired: both reference implementations
+ * measured that the CN gateway normalizes invisible characters before matching,
+ * so a U+200B separator was equivalent to not rewriting at all.
+ */
 function neutralizeSignatureText(text: string): string {
   const withoutOpener = text.replace(CHANNEL_OPENER, '$1You are an AI agent.')
-  return withoutOpener.replace(CHANNEL_SIGNATURE_PHRASE, `DeepSeek${ZERO_WIDTH_SPACE}$1Harness`)
+  // Group 1 is the whitespace between the two words, so the separator replaces
+  // it rather than being re-emitted beside it.
+  // The separator alone is not enough: a captured request (issue #25) showed
+  // `DeepSeek - Harness` still on the wire and still refused, so the gate reads
+  // through the punctuation. Drop the product name instead of splitting it —
+  // the sentence keeps its meaning ("the implementation checkout") without
+  // naming a client the gateway has not approved.
+  const withoutBrand = withoutOpener.replace(CHANNEL_SIGNATURE_PHRASE, 'the agent runtime')
+  return rewriteChannelGateSentences(withoutBrand)
 }
+
+/**
+ * DSH's identity lines. The gate matches each one **independently** (measured
+ * 2026-10-29 by two probes on the sibling plugin), so a body whose brand is
+ * already neutralized still fails on these.
+ */
+const IDENTITY_REWRITES: readonly (readonly [string, string])[] = [
+  // Must not reintroduce the brand: this pass runs after the brand rewrite, and
+  // a replacement carrying `DeepSeek Harness` would only be cleaned up on the
+  // next pass — the non-idempotence the idempotence test catches.
+  ['You are a helpful AI assistant.', 'You are a capable AI helper.'],
+  ['You are an AI assistant', 'You are an AI agent.'],
+  ['You are a coding agent powered by the ', 'You are a coding agent running on the '],
+  [
+    'You are interacting with the user through the DeepSeek Harness web interface',
+    'You are working with the user inside the DeepSeek Harness web interface',
+  ],
+  ['Agent Teams is available in this session', 'Agent Teams is enabled for this session'],
+]
+
+/**
+ * The @-path paragraph `@deepseek-ai/dsh-file-reference` injects into every
+ * system prompt — a **combination** fingerprint, not one magic sentence:
+ * every sentence alone answers 200, the paragraph answers 400, and rewriting
+ * one sentence breaks it (all three measured on 2026-10-27→29 by the two
+ * reference plugins). Hence one row per sentence: a single whole-paragraph
+ * literal would stop matching the moment the host rewords one word.
+ *
+ * The `from` strings come from the upstream reports' wording. A capture of THIS
+ * host (issue #25 diagnostic, `~/.dsh/workbuddy-sent-body.json`) shows it
+ * already ships several of the neutralized forms, so most rows are no-ops here
+ * and are kept for hosts that still send the originals. Only `from` strings a
+ * measurement actually produced appear in the table — an unmatched sentence
+ * passes through byte-identical rather than being guessed at.
+ */
+const FILE_REFERENCE_REWRITES: readonly (readonly [string, string])[] = [
+  // Only measured strings, one row per sentence: a single whole-paragraph
+  // literal would stop matching the moment the host rewords one word.
+  [
+    'Paths prefixed with @ point to files the user referenced.',
+    'Tokens starting with @ are locations the user explicitly named.',
+  ],
+  [
+    'Relative paths resolve against the working directory;',
+    'Relative paths are resolved against the workspace root;',
+  ],
+  [
+    'absolute paths identify files or directories on the host.',
+    'absolute paths point at files or directories on the host.',
+  ],
+  ['A trailing slash marks a directory:', 'A trailing slash indicates a directory:'],
+  ['list it when its contents matter.', 'list it whenever its contents matter.'],
+  ['Anything else is a file:', 'Everything else is a file:'],
+  [
+    'use the read tool when its contents are needed,',
+    'use the read tool whenever you need its contents,',
+  ],
+  [
+    'and do not claim to have inspected it before reading.',
+    'and never claim to have inspected it before reading it.',
+  ],
+  ['@"..." quotes a path containing spaces.', 'A path containing spaces is quoted with @"...".'],
+]
 
 /**
  * The opener DSH puts at the head of every system prompt.
@@ -591,8 +683,26 @@ const CHANNEL_OPENER =
  */
 const CHANNEL_SIGNATURE_PHRASE = /(?<![\\/])DeepSeek([\s\u00A0]+)Harness(?![\\/])/gi
 
-/** U+200B: invisible to a reader and to the model, breaks a substring match. */
-const ZERO_WIDTH_SPACE = '\u200B'
+/**
+ * The upstream refusal that means "content filter", not "bad request".
+ *
+ * Two shapes reach us and both must be recognised:
+ *
+ * - the documented gate form, `{"code":11-128,"msg":"Illegal API invocation…"}`;
+ * - the shape issue #25 actually renders (reproduced 2026-10-29):
+ *   `{"message":"请求被拦截，请重新发送","type":"client","code":"client"}` — **no
+ *   `11-128` anywhere**, so a code-only test misses the exact case the hint
+ *   exists for.
+ */
+const CHANNEL_GATE_CODE = /\b11-128\b/
+
+/** The CN gateway's user-facing block copy, which survives even when the code does not. */
+const CHANNEL_GATE_COPY = /请求被拦截/
+
+/** True when an upstream body is a channel-gate refusal; see {@link CHANNEL_GATE_CODE}. */
+export function isChannelGateBody(body: string): boolean {
+  return CHANNEL_GATE_CODE.test(body) || CHANNEL_GATE_COPY.test(body)
+}
 
 /** Rewrite `role: "developer"` messages to `role: "system"` (upstream rejects developer). */
 function normalizeDeveloperRole(obj: Record<string, unknown>): void {

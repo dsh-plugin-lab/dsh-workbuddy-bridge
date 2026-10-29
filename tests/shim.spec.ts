@@ -258,6 +258,60 @@ describe('WorkBuddy shim', () => {
     }
   })
 
+  it('adds the actionable hint to a channel-gate refusal (issue #25)', async () => {
+    // The raw body of a content-filter refusal reads like a transient hiccup
+    // ("请重新发送"), which invites the retry that just reproduces it. The two
+    // actions that help — a new conversation, an updated plugin — are added,
+    // and the code stays hyphenated so an echo of this text cannot re-arm it.
+    const harness = await startShim(() => ({
+      ok: false,
+      status: 400,
+      kind: 'client',
+      message: JSON.stringify({
+        message: '请求被拦截，请重新发送',
+        type: 'client',
+        code: 'client',
+      }),
+    }))
+    const response = await fetch(`${harness.shim.baseUrl()}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${harness.shim.token()}`,
+      },
+      body: JSON.stringify({ model: 'hy3', messages: [] }),
+    })
+    const body = (await response.json()) as { error: { message: string } }
+    expect(body.error.message).toContain('请求被拦截')
+    expect(body.error.message).toContain('新开会话')
+    expect(body.error.message).toMatch(/\b11-128\b/)
+    expect(body.error.message).not.toMatch(/\b(?:401|403)\b/)
+  })
+
+  it('recognises the gate by its copy when the body carries no code at all', async () => {
+    // Reproduced on a live CN run (2026-10-29): the refusal that reaches a user
+    // is `{"message":"请求被拦截，请重新发送","type":"client","code":"client"}` —
+    // the documented `11-128` is nowhere in it. A code-only detector silently
+    // skips the hint for exactly the symptom issue #25 reports.
+    const harness = await startShim(() => ({
+      ok: false,
+      status: 400,
+      kind: 'client',
+      message: '{"type":"client","code":"client","message":"请求被拦截，请重新发送"}',
+    }))
+    const response = await fetch(`${harness.shim.baseUrl()}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${harness.shim.token()}`,
+      },
+      body: JSON.stringify({ model: 'hy3', messages: [] }),
+    })
+    const body = (await response.json()) as { error: { message: string } }
+    expect(body.error.message).toContain('新开会话')
+    expect(body.error.message).toMatch(/\b11-128\b/)
+  })
+
   it('keeps the status on a session_dead failure, where it is the actionable fact', async () => {
     const harness = await startShim(() => ({
       ok: false,
