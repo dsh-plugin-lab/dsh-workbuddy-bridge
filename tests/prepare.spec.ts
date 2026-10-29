@@ -172,10 +172,14 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
     expect(rewritten[1]).toEqual(parts[1])
   })
 
-  it('breaks a mid-sentence occurrence losslessly, keeping the whitespace it used', () => {
-    expect(textOf(system('Powered by DeepSeek Harness, an agent runtime.'))).toBe(
-      'Powered by DeepSeek\u200B Harness, an agent runtime.',
-    )
+  it('rewrites a mid-sentence brand occurrence with a real word, not an invisible byte', () => {
+    // The zero-width variant is retired: measured 2026-10-29 on two independent
+    // probes, the CN gateway normalizes U+200B before matching, so the phrase
+    // still tripped the gate. A visible separator is what a real rewording
+    // looks like, and it survives normalization.
+    const rewritten = textOf(system('Powered by DeepSeek Harness, an agent runtime.'))
+    expect(rewritten).toBe('Powered by the agent runtime, an agent runtime.')
+    expect(rewritten).not.toContain('\u200B')
   })
 
   it('never rewrites the phrase inside a path, where it is a real directory name', () => {
@@ -242,7 +246,7 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
       ),
     ) as { messages: { content: Record<string, unknown>[] }[] }
     const parts = body.messages[0]!.content
-    expect(parts[0]!['text']).toBe('Powered by DeepSeek\u200B Harness.')
+    expect(parts[0]!['text']).toBe('Powered by the agent runtime.')
     expect(parts[1]).toEqual(image)
   })
 
@@ -280,13 +284,13 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
     const message = body.messages[0]!
     for (const text of [message.reasoning_content, message.reasoning]) {
       expect(text).not.toContain('DeepSeek Harness')
-      expect(text).toContain('DeepSeek\u200B Harness')
+      expect(text).toContain('the agent runtime')
     }
     const args = message.tool_calls[0]!.function.arguments
     expect(args).not.toContain('DeepSeek Harness')
-    expect(args).toContain('DeepSeek\u200B Harness')
+    expect(args).toContain('the agent runtime')
     // The argument string must still be valid JSON with its other fields intact.
-    expect(JSON.parse(args)).toEqual({ command: 'dir', note: 'DeepSeek\u200B Harness build' })
+    expect(JSON.parse(args)).toEqual({ command: 'dir', note: 'the agent runtime build' })
   })
 
   it('keeps a real path inside a tool-call argument byte-identical', () => {
@@ -335,6 +339,146 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
     expect(prepareChatBody(JSON.stringify({ model: 'm' }))).toBe(
       JSON.stringify({ model: 'm', stream: true }),
     )
+  })
+
+  describe('the file-reference paragraph (issue #25; captured 2026-10-29)', () => {
+    // The paragraph as a REAL request carried it, taken from the diagnostic
+    // capture (~/.dsh/workbuddy-sent-body.json). The upstream reports describe a
+    // different build: this host already ships "Tokens prefixed with @",
+    // "from the workspace root", "point at", "indicates a directory",
+    // "whenever you need its contents" and "A path containing spaces is quoted
+    // with ...". Only the first sentence still reaches the wire in original
+    // wording, which is why it is the only `from` row left.
+    const A = 'Paths prefixed with @ point to files the user referenced.'
+    const rest =
+      ' Relative paths resolve from the workspace root; absolute paths point at files or directories on the host.' +
+      ' A trailing slash indicates a directory: list it whenever its contents matter.' +
+      ' Everything else is a file: use the read tool whenever you need its contents,' +
+      ' and never claim to have inspected it before reading it.' +
+      ' A path containing spaces is quoted with @"...".'
+
+    it('rewrites the one sentence the host still sends in original wording', () => {
+      const out = textOf(system(A + rest))
+      expect(out).not.toContain('Paths prefixed with @ point to files the user referenced.')
+      expect(out).toContain('Tokens starting with @ are locations the user explicitly named.')
+      // The already-neutralized remainder stays byte-identical: rewriting it
+      // again would change instructions the gate no longer objects to.
+      expect(out).toContain(
+        'Relative paths resolve from the workspace root; absolute paths point at files or directories on the host.',
+      )
+    })
+
+    it('rewrites a single sentence in isolation', () => {
+      expect(textOf(system(A))).toBe(
+        'Tokens starting with @ are locations the user explicitly named.',
+      )
+    })
+
+    it('leaves the already-neutralized paragraph untouched, so it is idempotent', () => {
+      const neutralized = rest.trim()
+      expect(textOf(system(neutralized))).toBe(neutralized)
+    })
+
+    it('is idempotent — no rewrite recreates another source sentence', () => {
+      const once = prepareChatBody(
+        JSON.stringify({ messages: [{ role: 'system', content: A + rest }] }),
+      )
+      expect(prepareChatBody(once)).toBe(once)
+    })
+
+    it('reaches the assistant echo and leaves user and tool messages byte-identical', () => {
+      const body = JSON.parse(
+        prepareChatBody(
+          JSON.stringify({
+            messages: [
+              { role: 'assistant', content: A },
+              { role: 'user', content: A },
+              { role: 'tool', content: A },
+            ],
+          }),
+        ),
+      ) as { messages: { content: string }[] }
+      expect(body.messages[0]!.content).toBe(
+        'Tokens starting with @ are locations the user explicitly named.',
+      )
+      // user/tool are re-measured as not scanned (200 with the intact identity),
+      // and they are the model's ground truth — never rewritten.
+      expect(body.messages[1]!.content).toBe(A)
+      expect(body.messages[2]!.content).toBe(A)
+    })
+
+    it('leaves unrelated prose about @ paths alone', () => {
+      // Anchored on the prompt's exact wording: a user's own sentence about
+      // `@` references must survive verbatim.
+      for (const content of [
+        'Paths prefixed with @ point to files the user mentioned earlier.',
+        'mail me at foo@bar.com',
+        'npm i @deepseek-ai/dsh',
+      ]) {
+        expect(textOf(system(content))).toBe(content)
+      }
+    })
+
+    it('leaves a single unlisted sentence alone rather than guessing at it', () => {
+      // Only measured strings are rewritten. An unmatched line passes through,
+      // because a wrong guess would silently change what the model is told.
+      const prose = 'Anything else here is fine: keep your own notes.'
+      expect(textOf(system(prose))).toBe(prose)
+    })
+  })
+
+  describe('the whole current DSH system prompt', () => {
+    // The end-to-end case the earlier, segment-by-segment fixes kept missing
+    // (issues #25 / #13): every measured family in one message, which is what
+    // the harness actually sends on every request.
+    const fileReference =
+      'Paths prefixed with @ point to files the user referenced.' +
+      ' Relative paths resolve against the working directory; absolute paths identify files or directories on the host.' +
+      ' A trailing slash marks a directory: list it when its contents matter.' +
+      ' Anything else is a file: use the read tool when its contents are needed,' +
+      ' and do not claim to have inspected it before reading.' +
+      ' @"..." quotes a path containing spaces.'
+
+    const systemPrompt = [
+      'You are an AI assistant.',
+      'You are a coding agent powered by the deepseek-v4.1-flash model.',
+      'You are interacting with the user through the DeepSeek Harness web interface whose URL the runtime context names.',
+      'Agent Teams is available in this session',
+      fileReference,
+      'Use the read tool.',
+    ].join('\n\n')
+
+    it('leaves no measured fingerprint in the system message', () => {
+      const out = textOf(system(systemPrompt))
+      for (const banned of [
+        'Paths prefixed with @ point to files the user referenced.',
+        'You are a helpful AI assistant.',
+        'You are a coding agent powered by',
+        'is available in this session',
+        'DeepSeek Harness',
+        'DeepSeek - Harness',
+      ]) {
+        expect(out).not.toContain(banned)
+      }
+      // No invisible bytes anywhere: the gateway normalizes them away, so
+      // relying on one is the same as not rewriting at all.
+      expect(out).not.toContain('\u200B')
+    })
+
+    it('keeps the prompt readable, so the model behaves the same', () => {
+      const out = textOf(system(systemPrompt))
+      expect(out).toContain('You are an AI agent.')
+      expect(out).toContain('You are a coding agent running on the deepseek-v4.1-flash model.')
+      expect(out).toContain('Agent Teams is enabled for this session')
+      expect(out).toContain('Use the read tool.')
+    })
+
+    it('is idempotent on the full prompt', () => {
+      const once = prepareChatBody(
+        JSON.stringify({ messages: [{ role: 'system', content: systemPrompt }] }),
+      )
+      expect(prepareChatBody(once)).toBe(once)
+    })
   })
 })
 
