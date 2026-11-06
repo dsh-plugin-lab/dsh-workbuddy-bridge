@@ -24,11 +24,13 @@ import type { WorkBuddyCatalog } from '../catalog/index.ts'
 import { hostIsLoopback, originIsLoopback } from '../llm/loopback.ts'
 import {
   isChannelGateBody,
+  isPlanLimitBody,
   prepareChatBody,
   upstreamDisplayMessage,
   WorkBuddyUpstreamClient,
   type UpstreamErrorKind,
 } from '../protocol/client.ts'
+import { WORKBUDDY_BRIDGE_VERSION } from '../version.ts'
 
 /** Minimal logger surface the plugin context already provides. */
 export interface ShimLogger {
@@ -159,10 +161,31 @@ const KIND_STATUS: Readonly<Record<UpstreamErrorKind, number>> = {
  * guidance itself, echoed back into a later request, cannot re-arm the gate.
  * No status digits (see {@link failureMessage}) and no retry advice: retrying
  * the same poisoned conversation reproduces the refusal.
+ *
+ * The running version rides along (issue #30): the same symptom reaches users
+ * on two very different layers — an install older than the fix, and a residual
+ * trigger after it — and without the version the user cannot tell which layer
+ * they are on, so the first thing they check is their account.
  */
-const CHANNEL_GATE_HINT =
-  ' — 渠道校验拦截（11-128）。请新开会话重试；若持续出现，先更新插件' +
-  ' / blocked by channel verification (11-128): start a new conversation, and update the plugin if it persists'
+function channelGateHint(): string {
+  return (
+    ` — 渠道校验拦截（11-128）。请新开会话重试；若持续出现，先更新插件（当前 ${WORKBUDDY_BRIDGE_VERSION}）` +
+    ' / blocked by channel verification (11-128): start a new conversation, and update the plugin' +
+    ` if it persists (running ${WORKBUDDY_BRIDGE_VERSION})`
+  )
+}
+
+/**
+ * What to do when the account's plan excludes the requested model (issue #24).
+ *
+ * No retry advice, because no retry can help: the model is not on this tier,
+ * and only picking a different model succeeds. The upstream's own
+ * `displayMsg` ("Your account type does not support this model.") says what is
+ * wrong but not what to do, which is the gap this fills.
+ */
+const PLAN_LIMIT_HINT =
+  ' — 当前账号套餐不包含这个模型（11158），请换用其他模型' +
+  ' / your plan does not include this model (11158): pick another one'
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
   const payload = JSON.stringify(body)
@@ -196,11 +219,13 @@ function writeOpenAIError(
  * written for a human ("账号存在异常行为，已被限制使用"), while the body is a JSON
  * document whose `msg` is often a machine phrase such as `request illegal`.
  *
- * The channel-gate code (`11-128`) appends {@link CHANNEL_GATE_HINT}: its raw
+ * The channel-gate code (`11-128`) appends {@link channelGateHint}: its raw
  * body is `{"message":"请求被拦截，请重新发送","type":"client","code":"client"}`,
  * which on its own reads as a transient hiccup the user should simply retry —
  * the two actions that actually help (a new conversation; update the plugin)
- * are not guessable from it.
+ * are not guessable from it. A plan-limit refusal (`11158`) appends
+ * {@link PLAN_LIMIT_HINT} for the same reason: the fix is "pick another model",
+ * which the upstream copy does not say.
  */
 function failureMessage(result: {
   status: number
@@ -215,7 +240,8 @@ function failureMessage(result: {
     result.kind === 'session_dead'
       ? `${head} (http ${result.status}): ${reason}`
       : `${head}: ${reason}`
-  return isChannelGateBody(result.message) ? `${line}${CHANNEL_GATE_HINT}` : line
+  const gated = isChannelGateBody(result.message) ? `${line}${channelGateHint()}` : line
+  return isPlanLimitBody(result.message) ? `${gated}${PLAN_LIMIT_HINT}` : gated
 }
 
 /** Read a request body with a size cap; over-limit bodies fail the request. */ function readBody(

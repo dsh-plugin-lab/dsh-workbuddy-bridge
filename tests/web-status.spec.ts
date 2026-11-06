@@ -208,7 +208,9 @@ describe('web status route gate', () => {
     expect(response.status).toBe(403)
   })
 
-  it('answers 405 for non-GET methods', async () => {
+  it('answers 405 for a POST when no replay hook is wired', async () => {
+    // The route is read-only by default: the only write it ever accepts is the
+    // capture replay, and only when the plugin wired one.
     const port = await startStatusServer()
     const response = await requestOnce({
       port,
@@ -216,6 +218,36 @@ describe('web status route gate', () => {
       headers: { host: `127.0.0.1:${String(port)}` },
     })
     expect(response.status).toBe(405)
+  })
+
+  it('replays the captured request only on a loopback POST', async () => {
+    // The experiment: the same request answered 200 from another process and 400
+    // from this one, so replaying inside the host separates "this request is
+    // refused" from "this process is refused".
+    let calls = 0
+    const port = await startStatusServer({
+      replayCaptured: async () => {
+        calls++
+        return { ok: false, replayedStatus: 400 }
+      },
+    })
+
+    const notLoopback = await requestOnce({
+      port,
+      method: 'POST',
+      headers: { host: 'attacker.example' },
+    })
+    expect(notLoopback.status).toBe(403)
+    expect(calls).toBe(0)
+
+    const loopback = await requestOnce({
+      port,
+      method: 'POST',
+      headers: { host: `127.0.0.1:${String(port)}` },
+    })
+    expect(loopback.status).toBe(200)
+    expect(calls).toBe(1)
+    expect(JSON.parse(loopback.body)).toMatchObject({ replayedStatus: 400 })
   })
 })
 
