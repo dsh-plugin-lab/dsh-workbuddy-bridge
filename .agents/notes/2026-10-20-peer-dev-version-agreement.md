@@ -1,6 +1,6 @@
 # 决策：peer 与 dev 版本不一致，一律「dev 跟 peer」（2026-10-20）
 
-状态：生效
+状态：**部分被取代** —— 决策本身（dev 跟 peer、peer 一个字节不动）仍生效；理由里「peer 是对宿主的兼容声明 / 收窄 peer 会让宿主静默跳过本插件」已被取代：自 0.2.1-alpha.4 起，包自己声明了 `engines.dsh` 就只按它判，`@deepseek-ai/dsh*` 的 peer 区间不参与兼容性判定（真源是宿主 `plugin-compatibility.ts`）。正文保留原样，作为当时的判例。
 
 ## 问题
 

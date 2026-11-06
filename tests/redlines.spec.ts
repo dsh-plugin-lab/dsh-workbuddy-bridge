@@ -50,9 +50,10 @@ describe('依赖分层', () => {
     // **范围是全部 peer，不只 @deepseek-ai/***：`react-dom` 正是非官方包里的那一处漂移；
     // 只查官方包会让这条判据对一半清单成立，而「一半成立」在绿的时候看不出差别。
     //
-    // 对齐方向固定为「dev 跟 peer」：peer 是**对宿主的兼容声明**，把它收窄成精确版本会让
-    // 装到别的补丁版本的宿主静默跳过本插件（见 AGENTS.md「活跃坑 · 宿主版本可能与 devDeps
-    // 错位」：peer 冲突被 `catch` 进 `skippedBundles`，插件像没装）。
+    // 对齐方向固定为「dev 跟 peer」：这是组织判据 + 声明面整洁，不是兼容性判断 —— 兼容性由
+    // `engines.dsh` 单独决定（自 0.2.1-alpha.4 起，包声明了 `engines.dsh` 就只按它判，
+    // `@deepseek-ai/dsh*` 的 peer 区间不参与判定，见宿主 plugin-compatibility.ts）。
+    // 「peer 决定可装性」是 0.2.1-alpha.4 之前的规则，本条判据不从那里取理由。
     const peers = Object.keys(pkg.peerDependencies)
     // 自检：peer 清单为空时下面那条断言恒为真 —— 那是「判据没跑到」，不是「判据通过」。
     expect(peers.length).toBeGreaterThan(0)
