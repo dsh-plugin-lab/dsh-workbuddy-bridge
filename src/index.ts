@@ -30,6 +30,7 @@ import {
 import { workbuddyCatalogPath, WorkBuddyCatalogStore } from './catalog/store.ts'
 import { WorkBuddyVisibilityStore, workbuddyVisibilityPath } from './catalog/visibility.ts'
 import { createWorkBuddyAdapter } from './llm/adapter.ts'
+import { lastCapturedRequest, recordChatOutcome, rememberChatRequest } from './llm/capture.ts'
 import { createWorkBuddyShim } from './llm/shim.ts'
 import {
   attributeCredit,
@@ -486,7 +487,18 @@ function createVariantRuntime(
   accountOf: (variantId: string) => string | undefined,
   creditIndex: WorkBuddySessionCreditIndex,
 ): VariantRuntime {
-  const client = new WorkBuddyUpstreamClient()
+  const client = new WorkBuddyUpstreamClient({
+    // Diagnostic only, and cheap when disarmed (`rememberChatRequest` returns
+    // immediately). Wired here because the client is one per variant and the
+    // hook sees the final headers — the half a refused request can differ in
+    // even when its body replays cleanly.
+    onChatRequest: ({ url, headers, body }) => {
+      rememberChatRequest(url, headers, body)
+    },
+    onChatOutcome: (outcome) => {
+      recordChatOutcome(outcome.status, outcome.message)
+    },
+  })
   const configured = configuredAuthFile(config, variant)
   const store = new WorkBuddyCredentialStore({
     variant,
@@ -870,6 +882,21 @@ export function apply(ctx: Context, refs: ConfigRefs): void {
         catalog: () => catalogSection(runtime),
         probe: () => probeSection(runtime, config().probeConsent),
         probeKey,
+        // Diagnostic: re-send the last captured request from inside this process.
+        // See `web/status.ts` for the experiment it answers.
+        replayCaptured: async () => {
+          const captured = lastCapturedRequest()
+          if (captured === undefined) return { error: 'nothing captured' }
+          const credential = await runtime.store.resolve()
+          const result = await runtime.client.chatStream(credential, captured.body)
+          return {
+            ok: result.ok,
+            replayedStatus: result.ok ? result.response.status : result.status,
+            capturedAt: captured.at,
+            capturedStatus: captured.status,
+            bodyLength: captured.body.length,
+          }
+        },
         // The full per-account hidden list — stale ids included — so the card's
         // checkboxes answer exactly what the picker filter reads. Absent (and
         // the card renders no controls) when no uid-keyed account is in effect.

@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { WorkBuddyCredentialStore } from '../src/credential/store.ts'
 import { WorkBuddyCatalog } from '../src/catalog/index.ts'
 import { createWorkBuddyShim, type WorkBuddyShim } from '../src/llm/shim.ts'
+import { WORKBUDDY_BRIDGE_VERSION } from '../src/version.ts'
 import type { WorkBuddyChatResult } from '../src/protocol/client.ts'
 
 const CLEANUP: (() => Promise<void>)[] = []
@@ -286,6 +287,43 @@ describe('WorkBuddy shim', () => {
     expect(body.error.message).toContain('新开会话')
     expect(body.error.message).toMatch(/\b11-128\b/)
     expect(body.error.message).not.toMatch(/\b(?:401|403)\b/)
+    // The running version rides along (issue #30): the same symptom has two
+    // very different causes — an install older than the fix, and a residual
+    // trigger after it — and without the version the user cannot tell which one
+    // they are looking at, so the first thing they check is their account.
+    expect(body.error.message).toContain(WORKBUDDY_BRIDGE_VERSION)
+  })
+
+  it('says "pick another model" when the plan excludes the model (issue #24)', async () => {
+    // `11158` is not retryable and not fixable by topping up credit: only
+    // choosing another model helps, and the upstream copy
+    // ("Your account type does not support this model.") does not say so.
+    const harness = await startShim(() => ({
+      ok: false,
+      status: 400,
+      kind: 'client',
+      message: JSON.stringify({
+        code: 11158,
+        msg: 'model [gpt-6-luna] is not allowed for user type [personal_free_user]',
+        displayMsg: { en: 'Your account type does not support this model.' },
+      }),
+    }))
+    const response = await fetch(`${harness.shim.baseUrl()}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        authorization: `Bearer ${harness.shim.token()}`,
+      },
+      body: JSON.stringify({ model: 'gpt-6-luna', messages: [] }),
+    })
+    const body = (await response.json()) as { error: { message: string } }
+    expect(body.error.message).toContain('Your account type does not support this model.')
+    expect(body.error.message).toContain('换用其他模型')
+    expect(body.error.message).toMatch(/\b11158\b/)
+    // No status digits, for the same reason as every other non-auth class.
+    expect(body.error.message).not.toMatch(/\b(?:401|403)\b/)
+    // Nor the channel-gate advice, which answers a different failure.
+    expect(body.error.message).not.toContain('新开会话')
   })
 
   it('recognises the gate by its copy when the body carries no code at all', async () => {

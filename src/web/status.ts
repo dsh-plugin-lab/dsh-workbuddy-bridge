@@ -64,6 +64,18 @@ export interface WorkBuddyStatusRouteOptions {
    * and tests keep their behaviour; the international variant passes its own.
    */
   path?: string
+  /**
+   * Re-send the most recently captured request from inside the host and report
+   * the verdict.
+   *
+   * Optional, and absent in tests and headless profiles. It exists for one
+   * experiment: the same body, headers and token answered 200 from a separate
+   * process and 400 from this one, which leaves the sending process as the only
+   * remaining variable — replaying here separates "this request is refused" from
+   * "this process's requests are refused". Loopback-only, like every field of
+   * this document.
+   */
+  replayCaptured?: () => Promise<unknown>
 }
 
 /** Redact token-like content before it crosses to the browser. */
@@ -232,6 +244,23 @@ export function workBuddyStatusHandler(
   deps: WorkBuddyStatusRouteOptions,
 ): (req: IncomingMessage, res: ServerResponse) => Promise<void> {
   return async (req, res) => {
+    if (req.method === 'POST') {
+      // The one write this route accepts, and only when the plugin wired it.
+      if (deps.replayCaptured === undefined) {
+        json(res, 405, { error: 'method not allowed' })
+        return
+      }
+      if (!loopbackRequest(req)) {
+        json(res, 403, { error: 'request-not-trusted' })
+        return
+      }
+      try {
+        json(res, 200, await deps.replayCaptured())
+      } catch (error: unknown) {
+        json(res, 500, { error: safeMessage(error) })
+      }
+      return
+    }
     if (req.method !== 'GET') {
       json(res, 405, { error: 'method not allowed' })
       return
