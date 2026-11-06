@@ -51,6 +51,15 @@ const UPSTREAM_CODE_KINDS: Readonly<Record<string, UpstreamErrorKind>> = {
   // 它不是本机凭据失效，重登录与换 key 都无效，而 `session_dead` 会让宿主把
   // 整轮失败显示成鉴权问题。
   '11140': 'client',
+  // 套餐不包含该模型（issue #24 实测：HTTP 400 / code `11158` /
+  // `model [gpt-6-luna] is not allowed for user type [personal_free_user]` /
+  // `displayMsg.en`「Your account type does not support this model.」）。
+  //
+  // 归 `client` 而不是 `hard_credit`：`hard_credit` 是「额度用尽」，宿主据此显示
+  // 充值引导；这里是账号等级本身不含这个模型，充钱也不变，用户该做的是换模型。
+  // 两者都不可重试，但可行动作不同 —— 具体文案由 shim 的套餐提示补充，
+  // 这一层只保证它不再落到 `kindOfStatus(400)` 这条碰巧等价的推测路径上。
+  '11158': 'client',
 }
 
 /** 业务码 → 失败类别：信封 code 非 0 时的第一落点。 */
@@ -59,6 +68,10 @@ const ENVELOPE_CODE_KINDS: Readonly<Record<number, UpstreamErrorKind>> = {
   11128: 'client',
   11133: 'client',
   11140: 'client',
+  // 与 `UPSTREAM_CODE_KINDS` 同一个观测的两副形状：`11158` 走信封
+  // （`{code, msg, displayMsg}`）时命中这里，走 `extError.code` 时命中那张表。
+  // 两张表必须同时收容，否则同一次失败在两种封装下分类不同。
+  11158: 'client',
 }
 
 /**

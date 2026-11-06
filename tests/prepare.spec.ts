@@ -182,6 +182,29 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
     expect(rewritten).not.toContain('\u200B')
   })
 
+  it('never puts two articles in front of the neutral phrase', () => {
+    // The replacement carries its own `the` (mid-sentence English needs one),
+    // so a sentence that already supplies one used to read
+    // `through the the agent runtime web interface`. Found on the live prompt:
+    // the identity row below matched only the no-`Harness` spelling, and the
+    // brand pass then doubled the article.
+    const rewritten = textOf(
+      system(
+        'You are interacting with the user through the DeepSeek web interface whose URL is named.',
+      ),
+    )
+    expect(rewritten).toBe(
+      'You are working with the user inside the agent runtime web interface whose URL is named.',
+    )
+    expect(rewritten).not.toMatch(/\bthe the\b/iu)
+    for (const content of [
+      'Read from the DeepSeek Harness checkout.',
+      'Read from the  DeepSeek   Harness checkout.',
+    ]) {
+      expect(textOf(system(content))).toBe('Read from the agent runtime checkout.')
+    }
+  })
+
   it('never rewrites the phrase inside a path, where it is a real directory name', () => {
     // A zero-width space in a path would make every tool call that quotes it
     // fail with a path the model cannot see is wrong.
@@ -341,47 +364,76 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
     )
   })
 
-  describe('the file-reference paragraph (issue #25; captured 2026-10-29)', () => {
-    // The paragraph as a REAL request carried it, taken from the diagnostic
-    // capture (~/.dsh/workbuddy-sent-body.json). The upstream reports describe a
-    // different build: this host already ships "Tokens prefixed with @",
-    // "from the workspace root", "point at", "indicates a directory",
-    // "whenever you need its contents" and "A path containing spaces is quoted
-    // with ...". Only the first sentence still reaches the wire in original
-    // wording, which is why it is the only `from` row left.
-    const A = 'Paths prefixed with @ point to files the user referenced.'
-    const rest =
-      ' Relative paths resolve from the workspace root; absolute paths point at files or directories on the host.' +
-      ' A trailing slash indicates a directory: list it whenever its contents matter.' +
-      ' Everything else is a file: use the read tool whenever you need its contents,' +
-      ' and never claim to have inspected it before reading it.' +
-      ' A path containing spaces is quoted with @"...".'
+  describe('the file-reference paragraph (re-measured 2026-11-06)', () => {
+    // One unit, not one sentence per row.
+    //
+    // Measured with a refusal RATE on a real 92 KB turn, because single probes on
+    // this gateway flip within minutes: the paragraph is refused 3/3, the same
+    // paragraph with one word inserted into its first sentence is still refused
+    // 3/3, and only replacing the paragraph outright clears it (0/3). Each
+    // sentence alone answers 200, so the match unit is the paragraph.
+    const PARAGRAPH =
+      'Paths prefixed with @ point to files the user referenced.' +
+      ' Relative paths resolve against the working directory; absolute paths identify files or directories on the host.' +
+      ' A trailing slash marks a directory: list it when its contents matter.' +
+      ' Anything else is a file: use the read tool when its contents are needed,' +
+      ' and do not claim to have inspected it before reading.' +
+      ' @"..." quotes a path containing spaces.'
 
-    it('rewrites the one sentence the host still sends in original wording', () => {
-      const out = textOf(system(A + rest))
-      expect(out).not.toContain('Paths prefixed with @ point to files the user referenced.')
-      expect(out).toContain('Tokens starting with @ are locations the user explicitly named.')
-      // The already-neutralized remainder stays byte-identical: rewriting it
-      // again would change instructions the gate no longer objects to.
-      expect(out).toContain(
-        'Relative paths resolve from the workspace root; absolute paths point at files or directories on the host.',
-      )
+    /** The neutral paragraph the rule substitutes; duplicated here on purpose so a
+     * silent change to the shipped wording fails this test instead of passing. */
+    const NEUTRAL =
+      'A token beginning with @ names a location the user pointed at.' +
+      ' Resolve relative ones from the project folder and treat absolute ones as host paths.' +
+      ' A trailing slash means a directory, otherwise it is a file.' +
+      ' Quote a path containing spaces with @"...".'
+
+    it('replaces the whole paragraph', () => {
+      expect(textOf(system(PARAGRAPH))).toBe(NEUTRAL)
     })
 
-    it('rewrites a single sentence in isolation', () => {
-      expect(textOf(system(A))).toBe(
-        'Tokens starting with @ are locations the user explicitly named.',
-      )
+    it('keeps what the model needs: the @ meaning and the quoting form', () => {
+      const out = textOf(system(PARAGRAPH))
+      // The glyph and its meaning survive; only the phrasing the gate reads is
+      // gone. Dropping @ entirely would be a functional regression, not a fix.
+      expect(out).toContain('@')
+      expect(out).toContain('names a location the user pointed at')
+      expect(out).toContain('@"..."')
+      // And none of the measured signature sentences survive in any form.
+      for (const banned of [
+        'Paths prefixed with @',
+        'the workspace root',
+        'the user referenced',
+        'working directory',
+      ]) {
+        expect(out).not.toContain(banned)
+      }
     })
 
-    it('leaves the already-neutralized paragraph untouched, so it is idempotent', () => {
-      const neutralized = rest.trim()
-      expect(textOf(system(neutralized))).toBe(neutralized)
+    it('replaces the wording older releases left in history', () => {
+      // A `to` side becomes a fingerprint once the gate has been measured against
+      // it, and a session that ran an older release carries those forms in its
+      // assistant echo. The pattern matches them by shape, not by one literal.
+      for (const opening of [
+        'Tokens prefixed with @ are paths that the user explicitly referenced.',
+        'Tokens starting with @ are locations that the user explicitly named.',
+      ]) {
+        const paragraph = `${opening}${PARAGRAPH.slice('Paths prefixed with @ point to files the user referenced.'.length)}`
+        expect(textOf(system(paragraph))).toBe(NEUTRAL)
+      }
     })
 
-    it('is idempotent — no rewrite recreates another source sentence', () => {
+    it('leaves a fragment alone, so history that was already truncated is not rewritten', () => {
+      // The rule needs the paragraph's shape. A lone sentence is not a signature
+      // on its own, so passing it through byte-identical is the measured-safe
+      // answer — and it keeps the rewrite from guessing at prose it cannot verify.
+      const sentence = 'Paths prefixed with @ point to files the user referenced.'
+      expect(textOf(system(sentence))).toBe(sentence)
+    })
+
+    it('is idempotent', () => {
       const once = prepareChatBody(
-        JSON.stringify({ messages: [{ role: 'system', content: A + rest }] }),
+        JSON.stringify({ messages: [{ role: 'system', content: PARAGRAPH }] }),
       )
       expect(prepareChatBody(once)).toBe(once)
     })
@@ -391,25 +443,21 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
         prepareChatBody(
           JSON.stringify({
             messages: [
-              { role: 'assistant', content: A },
-              { role: 'user', content: A },
-              { role: 'tool', content: A },
+              { role: 'assistant', content: PARAGRAPH },
+              { role: 'user', content: PARAGRAPH },
+              { role: 'tool', content: PARAGRAPH },
             ],
           }),
         ),
       ) as { messages: { content: string }[] }
-      expect(body.messages[0]!.content).toBe(
-        'Tokens starting with @ are locations the user explicitly named.',
-      )
+      expect(body.messages[0]!.content).toBe(NEUTRAL)
       // user/tool are re-measured as not scanned (200 with the intact identity),
       // and they are the model's ground truth — never rewritten.
-      expect(body.messages[1]!.content).toBe(A)
-      expect(body.messages[2]!.content).toBe(A)
+      expect(body.messages[1]!.content).toBe(PARAGRAPH)
+      expect(body.messages[2]!.content).toBe(PARAGRAPH)
     })
 
     it('leaves unrelated prose about @ paths alone', () => {
-      // Anchored on the prompt's exact wording: a user's own sentence about
-      // `@` references must survive verbatim.
       for (const content of [
         'Paths prefixed with @ point to files the user mentioned earlier.',
         'mail me at foo@bar.com',
@@ -417,13 +465,6 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
       ]) {
         expect(textOf(system(content))).toBe(content)
       }
-    })
-
-    it('leaves a single unlisted sentence alone rather than guessing at it', () => {
-      // Only measured strings are rewritten. An unmatched line passes through,
-      // because a wrong guess would silently change what the model is told.
-      const prose = 'Anything else here is fine: keep your own notes.'
-      expect(textOf(system(prose))).toBe(prose)
     })
   })
 
@@ -463,12 +504,20 @@ describe('prepareChatBody channel signature (measured 2026-10-21)', () => {
       // No invisible bytes anywhere: the gateway normalizes them away, so
       // relying on one is the same as not rewriting at all.
       expect(out).not.toContain('\u200B')
+      // Nor an article the rewrite itself doubled.
+      expect(out).not.toMatch(/\bthe the\b/iu)
     })
 
     it('keeps the prompt readable, so the model behaves the same', () => {
       const out = textOf(system(systemPrompt))
       expect(out).toContain('You are an AI agent.')
       expect(out).toContain('You are a coding agent running on the deepseek-v4.1-flash model.')
+      // The identity sentence must survive as English: the brand pass leaves the
+      // article the original sentence already had (`through the …`), so the
+      // neutral phrase contributes only its noun.
+      expect(out).toContain(
+        'You are interacting with the user through the agent runtime web interface',
+      )
       expect(out).toContain('Agent Teams is enabled for this session')
       expect(out).toContain('Use the read tool.')
     })
@@ -544,6 +593,40 @@ describe('classifyUpstreamError', () => {
   it('classifies 5xx as server and other 4xx as client', () => {
     expect(classifyUpstreamError(503, '')).toBe('server')
     expect(classifyUpstreamError(400, 'bad')).toBe('client')
+  })
+
+  it('classifies the plan-limit code 11158 on both envelope shapes (issue #24)', () => {
+    // A free account asking for a paid model answers 400 / 11158 with a
+    // human-readable `displayMsg`. Before the table knew the code it landed on
+    // `kindOfStatus(400)` — same value, but by coincidence, and with nothing
+    // naming the real cause, so the shim could not add the "pick another model"
+    // advice the situation needs.
+    expect(
+      classifyUpstreamError(
+        400,
+        JSON.stringify({
+          code: 11158,
+          msg: 'model [gpt-6-luna] is not allowed for user type [personal_free_user]',
+          displayMsg: { en: 'Your account type does not support this model.' },
+        }),
+      ),
+    ).toBe('client')
+    // The other wire shape: the code arrives as a string under `extError`.
+    expect(
+      classifyUpstreamError(400, JSON.stringify({ extError: { code: '11158', message: 'nope' } })),
+    ).toBe('client')
+  })
+
+  it('never files a plan limit with hard_credit, which spends the user credit', () => {
+    // `hard_credit` is "out of credit" and the card answers it with a top-up
+    // prompt. A tier exclusion cannot be fixed by paying, so filing it there
+    // would send the user to the wrong screen.
+    for (const body of [
+      JSON.stringify({ code: 11158, msg: 'model not allowed' }),
+      JSON.stringify({ code: 11158, msg: '积分不足' }),
+    ]) {
+      expect(classifyUpstreamError(400, body)).not.toBe('hard_credit')
+    }
   })
 })
 
