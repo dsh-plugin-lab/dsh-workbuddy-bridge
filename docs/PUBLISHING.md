@@ -78,7 +78,7 @@
 
 - **声明面的唯一真源是 [package.json](../package.json)**：`engines.dsh` 与全部 `@deepseek-ai/dsh-*` 声明**逐字相同**（同一个区间串，含运算符与上限）。本文与门面都不重抄那个值。
 - **声明面按族（`||`）枚举**，覆盖哪些族以 [package.json](../package.json) 为准；宿主换线时，同一次改动内改写 `engines.dsh` 与全部 `@deepseek-ai/dsh-*`，并同步 [README.md](../README.md) 的「兼容与已知限制」一节（中英两份）。**本仓不提供跨代兼容层**。
-- 判断「声明还罩不罩得住被跟的那条线」用 `pnpm run check:release`（它比 peer 与 `engines.dsh` 的下限）。
+- 判断「声明还罩不罩得住被跟的那条线」用 `node scripts/check-declaration.mjs`（问 npm：声明的区间匹配到哪些版本，被跟的那条线在不在里面）。`pnpm run check:release` 不回答这个 —— 它只比对 peer 与 `engines.dsh` 的**下限自洽**（同一件事别写两个值），不判覆盖。
 
 ## 本地开发装法（link:）
 

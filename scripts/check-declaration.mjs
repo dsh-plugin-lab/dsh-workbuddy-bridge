@@ -40,7 +40,7 @@ export const TRACKED_LINE = 'next'
 /**
  * 巡检要判的**全部目标线**：声明面承诺了哪几族，这里就得判哪几族。
  *
- * 为什么不是只判一条：声明面是**三族并集**（0.1.7-rc / 0.2.0-rc / 0.2.1-rc），
+ * 为什么不是只判一条：声明面是**四族并集**（0.1.7-rc / 0.2.0-rc / 0.2.1-rc / 0.2.2-rc），
  * 只判其中一条等于「声明了却没验」—— 另外两族烂掉也没有任何判据会红，
  * 那正是姊妹仓 2026-10-19 修掉的「假绿」同类问题。
  *
@@ -51,6 +51,7 @@ export const TRACKED_LINE = 'next'
  */
 export const TRACKED_LINES = [
   { line: 'next', kind: 'tag' },
+  { line: '0.2.1-rc', kind: 'prefix' },
   { line: '0.2.0-rc', kind: 'prefix' },
   { line: '0.1.7-rc', kind: 'prefix' },
 ]
