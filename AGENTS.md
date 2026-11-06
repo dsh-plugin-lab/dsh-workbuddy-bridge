@@ -79,6 +79,14 @@
 
 ## 活跃坑
 
+- **`11-128` 是「每字段签名计数」，判定单元会随网关升级；判据必须用拒绝率，不能用单次观测**：
+  2026-11-06 实测（CN，真实 92 KB 会话）：单句各自 200、整段 400；给首句插一个 `that` 仍 3/3 被拒；
+  **整段替换**才 0/3。同一份 body 分钟级内还会从 200 翻到 400（13:39 与 13:40 各测一次），
+  所以改写之外还有**有界重试**兜底（`GATE_RETRY_DELAYS_MS`，只重试 11-128 族）。
+  别再把 `from` 串逐句往表里加：那张逐句表**从未命中**过宿主实发文本（抓包段落过 `prepareChatBody`
+  逐字节不变）。排障先抓真实请求 —— 开关与用法见 [src/llm/README.md](src/llm/README.md)
+  （默认关；一请求一行，含 headers 与 token 指纹），判定方法与实测矩阵见
+  [.agents/notes/2026-11-06-11-128-match-unit-is-the-paragraph.md](.agents/notes/2026-11-06-11-128-match-unit-is-the-paragraph.md)。
 - **`11128` 有两个来源，先分清是哪一条**：正文里的产品名（CN）与国际版的渠道身份头组是**两件独立的事**，修复位置也不同。
   下面这条讲前者；后者见 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)「渠道身份：国际版要求 trace / conversation 头组」。
   **国际版那条 `displayTips` 说「渠道校验」是真的**（2026-10-23 起国际网关校验客户端身份，缺 `X-Trace-ID` 与四个
