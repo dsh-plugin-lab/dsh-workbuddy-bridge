@@ -145,6 +145,32 @@ export type WorkBuddyChatResult =
   | { ok: true; response: Response }
   | { ok: false; status: number; kind: UpstreamErrorKind; message: string }
 
+/**
+ * Wait before each gate retry, in milliseconds; the length is the retry budget.
+ *
+ * Measured 2026-11-06 (CN gateway): the first attempt of a conversation is refused
+ * and the identical request answers 200 at +0.74 s. Two steps cover that window
+ * with room to spare; a third would only add latency to a turn that is genuinely
+ * blocked.
+ */
+const GATE_RETRY_DELAYS_MS = [400, 1200] as const
+
+/** Abortable delay: a cancelled turn must not keep retrying. */
+async function sleep(ms: number, signal: AbortSignal | undefined): Promise<void> {
+  if (signal?.aborted === true) return
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort)
+      resolve()
+    }, ms)
+    const onAbort = (): void => {
+      clearTimeout(timer)
+      resolve()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+  })
+}
+
 const CN_CHAT_BASE = 'https://copilot.tencent.com'
 const CN_BILLING_BASE = 'https://www.codebuddy.cn'
 const GLOBAL_BASE = 'https://www.workbuddy.ai'
@@ -574,10 +600,12 @@ function neutralizeAssistantExtras(message: Record<string, unknown>): void {
  */
 export function rewriteChannelGateSentences(text: string): string {
   let out = text
-  for (const [from, to] of [...IDENTITY_REWRITES, ...FILE_REFERENCE_REWRITES]) {
+  for (const [from, to] of IDENTITY_REWRITES) {
     if (out.includes(from)) out = out.split(from).join(to)
   }
-  return out
+  // The @-path paragraph is one unit, not one sentence per row: the gateway's
+  // match unit is the paragraph, see {@link FILE_REFERENCE_PARAGRAPH}.
+  return out.replace(FILE_REFERENCE_PARAGRAPH, FILE_REFERENCE_REPLACEMENT)
 }
 
 /**
@@ -589,7 +617,16 @@ export function rewriteChannelGateSentences(text: string): string {
  * so a U+200B separator was equivalent to not rewriting at all.
  */
 function neutralizeSignatureText(text: string): string {
-  const withoutOpener = text.replace(CHANNEL_OPENER, '$1You are an AI agent.')
+  // The vocabulary rows run **first**. One of them quotes the brand verbatim
+  // (`… through the DeepSeek web interface …`), so running the brand pass first
+  // rewrote that word out from under the row: the row could never match, the
+  // sentence went upstream half-rewritten, and the rewrite produced `through the
+  // the agent runtime web interface` — the article from the original sentence
+  // followed by the article the replacement brings. Ordering is the fix for
+  // both; {@link replaceBrandPhrase} removes the residual duplication for the
+  // sentences no row covers (the `DeepSeek Harness` spelling).
+  const rewritten = rewriteChannelGateSentences(text)
+  const withoutOpener = rewritten.replace(CHANNEL_OPENER, '$1You are an AI agent.')
   // Group 1 is the whitespace between the two words, so the separator replaces
   // it rather than being re-emitted beside it.
   // The separator alone is not enough: a captured request (issue #25) showed
@@ -597,72 +634,111 @@ function neutralizeSignatureText(text: string): string {
   // through the punctuation. Drop the product name instead of splitting it —
   // the sentence keeps its meaning ("the implementation checkout") without
   // naming a client the gateway has not approved.
-  const withoutBrand = withoutOpener.replace(CHANNEL_SIGNATURE_PHRASE, 'the agent runtime')
-  return rewriteChannelGateSentences(withoutBrand)
+  return replaceBrandPhrase(withoutOpener)
+}
+
+/** What the product phrase becomes; see {@link replaceBrandPhrase}. */
+const BRAND_PHRASE_REPLACEMENT = 'the agent runtime'
+
+/**
+ * The phrase as it appears after an article the sentence already wrote
+ * (`… through the DeepSeek Harness web interface`).
+ *
+ * Matched **with** that article so the replacement supplies the only one:
+ * replacing the bare phrase there produced `through the the agent runtime`,
+ * which is what this pattern exists to prevent. It also collapses whatever
+ * whitespace run separated the three words, so the sentence reads normally
+ * afterwards. The trailing slash guard is the same one the bare pattern uses, so
+ * a real `…/DeepSeek Harness/…` path is still never touched.
+ */
+const CHANNEL_SIGNATURE_PHRASE_AFTER_ARTICLE =
+  /\bthe[\s\u00A0]+DeepSeek[\s\u00A0]+Harness(?![\\/])/gi
+
+/**
+ * Replace the brand phrase with a neutral noun phrase, in both of the forms a
+ * sentence can use it.
+ *
+ * The replacement carries its own `the` because the phrase is normally the
+ * subject of a mid-sentence clause (`Powered by DeepSeek Harness.` → `Powered by
+ * the agent runtime.`). The article-bearing spelling is handled first and
+ * absorbs that article; the bare spelling then gets the article from the
+ * replacement. One pattern cannot do both, because the replacement text is a
+ * constant.
+ */
+function replaceBrandPhrase(text: string): string {
+  return text
+    .replace(CHANNEL_SIGNATURE_PHRASE_AFTER_ARTICLE, BRAND_PHRASE_REPLACEMENT)
+    .replace(CHANNEL_SIGNATURE_PHRASE, BRAND_PHRASE_REPLACEMENT)
 }
 
 /**
  * DSH's identity lines. The gate matches each one **independently** (measured
  * 2026-10-29 by two probes on the sibling plugin), so a body whose brand is
  * already neutralized still fails on these.
+ *
+ * These rows match the host's **original** wording and therefore run before the
+ * brand pass (see {@link neutralizeSignatureText}). A `to` side must not
+ * reintroduce the brand: the brand pass that follows would rewrite it again,
+ * and the second pass would then produce a different string — the
+ * non-idempotence the idempotence test catches.
  */
 const IDENTITY_REWRITES: readonly (readonly [string, string])[] = [
-  // Must not reintroduce the brand: this pass runs after the brand rewrite, and
-  // a replacement carrying `DeepSeek Harness` would only be cleaned up on the
-  // next pass — the non-idempotence the idempotence test catches.
   ['You are a helpful AI assistant.', 'You are a capable AI helper.'],
   ['You are an AI assistant', 'You are an AI agent.'],
   ['You are a coding agent powered by the ', 'You are a coding agent running on the '],
   [
-    'You are interacting with the user through the DeepSeek Harness web interface',
-    'You are working with the user inside the DeepSeek Harness web interface',
+    'You are interacting with the user through the DeepSeek web interface',
+    'You are working with the user inside the agent runtime web interface',
   ],
   ['Agent Teams is available in this session', 'Agent Teams is enabled for this session'],
 ]
 
 /**
  * The @-path paragraph `@deepseek-ai/dsh-file-reference` injects into every
- * system prompt — a **combination** fingerprint, not one magic sentence:
- * every sentence alone answers 200, the paragraph answers 400, and rewriting
- * one sentence breaks it (all three measured on 2026-10-27→29 by the two
- * reference plugins). Hence one row per sentence: a single whole-paragraph
- * literal would stop matching the moment the host rewords one word.
+ * system prompt.
  *
- * The `from` strings come from the upstream reports' wording. A capture of THIS
- * host (issue #25 diagnostic, `~/.dsh/workbuddy-sent-body.json`) shows it
- * already ships several of the neutralized forms, so most rows are no-ops here
- * and are kept for hosts that still send the originals. Only `from` strings a
- * measurement actually produced appear in the table — an unmatched sentence
- * passes through byte-identical rather than being guessed at.
+ * **Whole-paragraph replacement, measured.** The gateway answers 200 to each
+ * sentence alone and 400 to the paragraph, i.e. the match unit is the paragraph,
+ * not a sentence. Everything short of replacing it leaves the count above the
+ * threshold, and that includes the sibling implementation's one-word insertion —
+ * measured 2026-11-06 against this gateway, on a real 92 KB turn:
+ *
+ * | form sent in \`system\`                              | refused |
+ * | ---                                                | ---     |
+ * | original paragraph                                 | 3/3     |
+ * | original + \`that\` inserted into the first sentence | 3/3     |
+ * | **replaced with the neutral paragraph below**       | **0/3** |
+ * | removed outright                                    | 0/3     |
+ *
+ * The rule matches the paragraph by its shape rather than by one literal string:
+ * the host has shipped at least two wordings (this repo's own older rewrite
+ * produced "Tokens prefixed with @ are paths that the user explicitly
+ * referenced."), and a literal would silently stop matching the next time the host
+ * reworded a word. The `@` glyph and its meaning survive in the replacement: the
+ * model still has to know what a leading `@` means, only the phrasing the gate
+ * reads is gone.
+ *
+ * Idempotent by construction: the replacement contains none of the shapes the
+ * pattern looks for.
  */
-const FILE_REFERENCE_REWRITES: readonly (readonly [string, string])[] = [
-  // Only measured strings, one row per sentence: a single whole-paragraph
-  // literal would stop matching the moment the host rewords one word.
-  [
-    'Paths prefixed with @ point to files the user referenced.',
-    'Tokens starting with @ are locations the user explicitly named.',
-  ],
-  [
-    'Relative paths resolve against the working directory;',
-    'Relative paths are resolved against the workspace root;',
-  ],
-  [
-    'absolute paths identify files or directories on the host.',
-    'absolute paths point at files or directories on the host.',
-  ],
-  ['A trailing slash marks a directory:', 'A trailing slash indicates a directory:'],
-  ['list it when its contents matter.', 'list it whenever its contents matter.'],
-  ['Anything else is a file:', 'Everything else is a file:'],
-  [
-    'use the read tool when its contents are needed,',
-    'use the read tool whenever you need its contents,',
-  ],
-  [
-    'and do not claim to have inspected it before reading.',
-    'and never claim to have inspected it before reading it.',
-  ],
-  ['@"..." quotes a path containing spaces.', 'A path containing spaces is quoted with @"...".'],
-]
+const FILE_REFERENCE_PARAGRAPH =
+  /(?:Paths prefixed with @|Tokens prefixed with @|Tokens starting with @)[\s\S]{0,600}?quotes a path containing spaces\./iu
+
+/** What the paragraph becomes; see {@link FILE_REFERENCE_PARAGRAPH}. */
+const FILE_REFERENCE_REPLACEMENT =
+  'A token beginning with @ names a location the user pointed at. ' +
+  'Resolve relative ones from the project folder and treat absolute ones as host paths. ' +
+  'A trailing slash means a directory, otherwise it is a file. ' +
+  'Quote a path containing spaces with @"...".'
+
+/**
+ * The same paragraph as an older release of this plugin left it in history.
+ *
+ * A `to` side becomes a fingerprint once the gate has been measured against it,
+ * and a session that ran 0.5.5 carries those forms in its `assistant` echo. They
+ * are matched by the same pattern above, so nothing extra is needed here — this
+ * note exists because the pattern's alternation is what makes that true.
+ */
 
 /**
  * The opener DSH puts at the head of every system prompt.
@@ -702,6 +778,25 @@ const CHANNEL_GATE_COPY = /请求被拦截/
 /** True when an upstream body is a channel-gate refusal; see {@link CHANNEL_GATE_CODE}. */
 export function isChannelGateBody(body: string): boolean {
   return CHANNEL_GATE_CODE.test(body) || CHANNEL_GATE_COPY.test(body)
+}
+
+/**
+ * The plan-limit refusal: the account's tier does not include the model
+ * (issue #24, measured on a free international account).
+ *
+ * Two shapes, because the code can be in the envelope or written into the
+ * message text — `{"code":11158,"msg":"model [gpt-6-luna] is not allowed for
+ * user type [personal_free_user]", "displayMsg":{…}}`. Both must be recognised
+ * for the same reason as the channel gate: the actionable advice (pick another
+ * model) is not guessable from `请求被拦截`-style copy, and retrying the same
+ * model can never succeed.
+ */
+const PLAN_LIMIT_CODE = /\b11158\b/
+const PLAN_LIMIT_COPY = /is not allowed for user type/i
+
+/** True when an upstream body says the account's plan excludes the model. */
+export function isPlanLimitBody(body: string): boolean {
+  return PLAN_LIMIT_CODE.test(body) || PLAN_LIMIT_COPY.test(body)
 }
 
 /** Rewrite `role: "developer"` messages to `role: "system"` (upstream rejects developer). */
@@ -821,6 +916,26 @@ export interface WorkBuddyUpstreamClientOptions {
    * billing never consult it — those requests keep their long-standing headers.
    */
   resolveChatIdentity?: (region: WorkBuddyRegion) => Promise<ChatIdentity>
+  /**
+   * Observes the final chat request — URL, complete headers, exact body — before
+   * it leaves. Diagnostic only; see `llm/capture.ts` for why headers are as
+   * load-bearing as the body when a request is refused on content.
+   *
+   * Kept as an injected hook rather than a built-in file write so the client
+   * stays free of filesystem policy, and so a test can assert the exact bytes
+   * without touching a disk.
+   */
+  onChatRequest?: (request: { url: string; headers: Record<string, string>; body: string }) => void
+  /**
+   * Observes how the chat request ended — the verdict that belongs to the
+   * request {@link onChatRequest} just reported. Status `0` is a transport
+   * failure.
+   *
+   * Paired with the request hook rather than left to the caller, because only
+   * this function sees both halves; splitting them is how a captured body gets
+   * paired with another request's verdict.
+   */
+  onChatOutcome?: (outcome: { status: number; message?: string }) => void
 }
 
 /**
@@ -839,6 +954,12 @@ export class WorkBuddyUpstreamClient {
   private readonly resolveAppVersion: () => Promise<AppVersionInfo>
   /** Chat-identity resolver; see {@link WorkBuddyUpstreamClientOptions.resolveChatIdentity}. */
   private readonly resolveChatIdentity: (region: WorkBuddyRegion) => Promise<ChatIdentity>
+  /** Request observer; see {@link WorkBuddyUpstreamClientOptions.onChatRequest}. */
+  private readonly onChatRequest:
+    ((request: { url: string; headers: Record<string, string>; body: string }) => void) | undefined
+  /** Outcome observer; see {@link WorkBuddyUpstreamClientOptions.onChatOutcome}. */
+  private readonly onChatOutcome:
+    ((outcome: { status: number; message?: string }) => void) | undefined
 
   /** Provenance of the most recent successful catalog fetch, for the card. */
   lastCatalog: WorkBuddyCatalogFetch | undefined
@@ -847,6 +968,22 @@ export class WorkBuddyUpstreamClient {
     this.resolveAppVersion = options.resolveAppVersion ?? (() => resolveAppVersion())
     this.resolveChatIdentity =
       options.resolveChatIdentity ?? ((region) => resolveChatIdentity(region))
+    this.onChatRequest = options.onChatRequest
+    this.onChatOutcome = options.onChatOutcome
+  }
+
+  /**
+   * Report an outcome without letting an observer break the request it observes.
+   *
+   * Both observers exist for diagnostics, so their failure must stay invisible to
+   * the message being diagnosed.
+   */
+  private reportOutcome(outcome: { status: number; message?: string }): void {
+    try {
+      this.onChatOutcome?.(outcome)
+    } catch {
+      // An observer must never fail the request it observes.
+    }
   }
 
   /**
@@ -880,27 +1017,69 @@ export class WorkBuddyUpstreamClient {
     }
     const body =
       region === 'global' ? prepareInternationalChatBody(bodyJson) : prepareChatBody(bodyJson)
-    let response: Response
-    try {
-      response = await fetch(`${chatBase(credential)}/v2/chat/completions`, {
-        method: 'POST',
-        headers: {
-          ...chatHeaders(credential, userAgent),
-          Authorization: `Bearer ${credential.accessToken}`,
-        },
-        body,
-        ...(signal === undefined ? {} : { signal }),
-      })
-    } catch (error: unknown) {
-      return { ok: false, status: 0, kind: 'server', message: `transport error: ${String(error)}` }
+    const url = `${chatBase(credential)}/v2/chat/completions`
+    const headers: Record<string, string> = {
+      ...chatHeaders(credential, userAgent),
+      Authorization: `Bearer ${credential.accessToken}`,
     }
-    if (response.ok) return { ok: true, response }
-    const text = (await response.text()).slice(0, ERROR_BODY_LIMIT)
+    // The hook runs after headers and body are final and before the fetch, so a
+    // capture is what the upstream receives — not what the caller intended.
+    try {
+      this.onChatRequest?.({ url, headers, body })
+    } catch {
+      // An observer must never fail the request it observes.
+    }
+    let response: Response
+    let attempt = 0
+    /** The last refusal, kept for the report once the retry budget is spent. */
+    let refusal: { status: number; text: string } | undefined
+    for (;;) {
+      attempt++
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers,
+          body,
+          ...(signal === undefined ? {} : { signal }),
+        })
+      } catch (error: unknown) {
+        this.reportOutcome({ status: 0, message: `transport error: ${String(error)}` })
+        return {
+          ok: false,
+          status: 0,
+          kind: 'server',
+          message: `transport error: ${String(error)}`,
+        }
+      }
+      if (response.ok) {
+        this.reportOutcome({ status: response.status })
+        return { ok: true, response }
+      }
+      const text = (await response.text()).slice(0, ERROR_BODY_LIMIT)
+      refusal = { status: response.status, text }
+      // The channel gate is transient per attempt, not per request: measured
+      // 2026-11-06 on the CN gateway, the FIRST attempt of a fresh conversation
+      // answers 400 / 11-128 while the identical body — same token, same headers,
+      // sent 0.7 s later from the same process — answers 200, and every later
+      // attempt also 200. So the refusal is neither content nor credential, and
+      // the same request simply has to be sent again.
+      //
+      // Bounded: two retries at 400 ms and 1.2 s cover the observed window
+      // without stalling a turn, and only the gate is retried — an auth, quota or
+      // rate answer is a real verdict about the account and must surface at once.
+      if (!isChannelGateBody(text) || attempt > GATE_RETRY_DELAYS_MS.length) break
+      // A cancelled turn has nobody waiting for the answer: report the refusal
+      // rather than spending the backoff on it.
+      if (signal?.aborted === true) break
+      await sleep(GATE_RETRY_DELAYS_MS[attempt - 1]!, signal)
+    }
+    const last = refusal ?? { status: response.status, text: '' }
+    this.reportOutcome({ status: last.status, message: last.text })
     return {
       ok: false,
-      status: response.status,
-      kind: classifyUpstreamError(response.status, text),
-      message: text,
+      status: last.status,
+      kind: classifyUpstreamError(last.status, last.text),
+      message: last.text,
     }
   }
 
