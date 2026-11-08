@@ -116,8 +116,7 @@
   [.agents/notes/2026-10-20-off-effort-strip-both-regions.md](.agents/notes/2026-10-20-off-effort-strip-both-regions.md)。
 - **宿主版本可能与 devDeps 错位**：本仓 devDeps 锁在某个宿主编译，实际运行的宿主可能更新。
   改代码前先跑 `dsh --version` 对比 [package.json](package.json) 的 devDeps；错位可能导致编译通过但运行时崩。
-  升级 devDeps 要同步决定 `engines.dsh` 的兼容范围 —— 宿主只按它判（自 DSH 0.2.1-alpha.4 起；
-  声明缺席才回退 peer）。
+  升级 devDeps 要同步决定 `engines.dsh` 的兼容范围 —— 宿主只按它判，声明缺席才回退 peer。
   连带一条：宿主线升级时，**宿主包的传递依赖也可能被抬**（`dsh-llm-pi-ai` 曾把 `@earendil-works/pi-ai`
   从 `^0.85.1` 抬到 `^0.87.1`）。本仓若把它写死在旧版，pnpm 会装出**两份同名包**，
   类型互不兼容 → 编译报「A 不能赋给 B」而两个路径都是 `node_modules`。判据：报错里出现两个
