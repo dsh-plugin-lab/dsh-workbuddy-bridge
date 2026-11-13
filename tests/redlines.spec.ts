@@ -10,6 +10,7 @@
 
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
+import YAML from 'yaml'
 
 const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
   name: string
@@ -74,6 +75,30 @@ describe('依赖分层', () => {
     // 自检：这条断言必须真的有对象可查。
     expect(bounds.length).toBeGreaterThan(0)
     for (const name of bounds) expect(pkg.devDependencies[name], name).toBeTruthy()
+  })
+})
+
+describe('workflow 文件必须是合法 YAML', () => {
+  // 2026-11-13：把兼容巡检矩阵从两族收窄成单族时，只删掉了那两条 `- line:` 腿，
+  // 三行 `blocking:` 留在了同一个映射里。GitHub 的解析器拒绝重复键，于是整份 workflow
+  // **秒退、零个 job**，`gh run view` 连步骤都拿不到，在 `gh run list` 里它的名字还退化成路径。
+  // 而 `pnpm run check` / typecheck / 测试都不看 `.github/`，本地一路绿 —— 缺陷只以「红」出现，
+  // 没有任何指向原因的信号。判据只能落在「解析一遍」上：重复键、缩进、结构错都在这一步现形。
+  const dir = new URL('../.github/workflows', import.meta.url)
+  const names = existsSync(dir) ? readdirSync(dir).filter((name) => /\.ya?ml$/.test(name)) : []
+
+  it('扫描器真的看到了 workflow 文件', () => {
+    expect(names.length).toBeGreaterThan(0)
+  })
+
+  it.each(names)('%s 能被解析，且没有重复键', (name) => {
+    // yaml 默认就把重复键当错误。**别传 `uniqueKeys: false`** ——
+    // 那正好关掉本条唯一要看的东西。
+    expect(() => YAML.parse(read(`.github/workflows/${name}`))).not.toThrow()
+  })
+
+  it('上面那条检测器有牙齿（反向控制）', () => {
+    expect(() => YAML.parse('jobs:\n  a:\n    b: 1\n    b: 2\n')).toThrow(/unique/)
   })
 })
 
