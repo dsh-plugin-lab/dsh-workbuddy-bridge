@@ -49,12 +49,7 @@ export const TRACKED_LINE = 'next'
  *
  * @type {{ line: string, kind: 'tag' | 'prefix' }[]}
  */
-export const TRACKED_LINES = [
-  { line: 'next', kind: 'tag' },
-  { line: '0.2.1-rc', kind: 'prefix' },
-  { line: '0.2.0-rc', kind: 'prefix' },
-  { line: '0.1.7-rc', kind: 'prefix' },
-]
+export const TRACKED_LINES = [{ line: 'next', kind: 'tag' }]
 
 /** 声明面里的宿主本体：`engines.dsh` 描述的就是它。 */
 const HOST_PACKAGE = '@deepseek-ai/dsh'

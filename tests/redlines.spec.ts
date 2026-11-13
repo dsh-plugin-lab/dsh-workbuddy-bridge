@@ -800,12 +800,13 @@ describe('文档不抄实测值', () => {
 
   it('上面那条提示的判据有牙齿（反向控制）', () => {
     // 复述宿主下限、不给出处 → 命中（会提示），并报出命中的值。
-    expect(needsSource('本仓只支持 DSH 0.1.7 线，不做跨代兼容。')).toMatchObject({
-      value: '0.1.7',
-    })
+    // 合成一个**下限本身**的句子来试：值从清单读，所以断言不能写死某个版本号。
+    const restated = `本仓只支持 DSH ${HOST_FLOOR} 线，不做跨代兼容。`
+    // 命中值只到数值段：`HOST_VERSION` 故意剥掉预发布段，因为文档里通常只写 `0.2.2`。
+    expect(needsSource(restated)).toMatchObject({ value: HOST_FLOOR.replace(/-.*$/, '') })
     // 同段补上出处、或标为历史 → 不提示。
     expect(
-      needsSource('本仓只支持 DSH 0.1.7 线；下限见 package.json 的 engines.dsh。'),
+      needsSource(`本仓只支持 DSH ${HOST_FLOOR} 线；下限见 package.json 的 engines.dsh。`),
     ).toBeUndefined()
     expect(needsSource('先例（2026-09-25）：实装宿主 0.1.7-rc.2 里两者都存在。')).toBeUndefined()
     // 插件自己的版本号不在管辖内：判据是清单里的真值，不是 `0.1.\d+` 的形状。
@@ -813,12 +814,12 @@ describe('文档不抄实测值', () => {
     expect(needsSource('版本 `0.1.0`；尚未发布到 npm。')).toBeUndefined()
     expect(needsSource('- [x] 首次发布 `0.1.0` 已完成\n- [ ] 这里不再需要走那条路')).toBeUndefined()
     // 值对但没点名宿主 → 也不提示：那可能只是在提一个版本号。
-    expect(needsSource('插件 `0.1.7` 版改了接缝。')).toBeUndefined()
+    expect(needsSource(`插件 \`${HOST_FLOOR}\` 版改了接缝。`)).toBeUndefined()
     // 真值来自清单，不是写死的形状。
-    expect(HOST_VERSION.test('宿主 0.1.7-rc.2')).toBe(true)
+    expect(HOST_VERSION.test(`宿主 ${HOST_FLOOR}`)).toBe(true)
     expect(HOST_VERSION.test('宿主 0.1.0')).toBe(false)
     // 自检用的谓词必须看得到「宿主 + 下限值」，哪怕那段已经带了出处。
-    expect(mentionsHostVersion('本仓只支持 DSH 0.1.7；下限见 package.json。')).toBe(true)
+    expect(mentionsHostVersion(`本仓只支持 DSH ${HOST_FLOOR}；下限见 package.json。`)).toBe(true)
   })
 })
 
