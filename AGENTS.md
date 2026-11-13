@@ -36,7 +36,8 @@
 - 装依赖：`pnpm install --config.node-linker=hoisted`
 - 全量检查（**顺序固定，build 必须在 test 之前**）：`tsc --noEmit` → `tsdown`（重建 `lib/`）→ `vitest run`
   - [tests/version.spec.ts](tests/version.spec.ts) 断言 `lib/` 产物里的版本与包一致，先跑测试会红（刻意设计）
-  - 上面三步就是 `pnpm check`；CI 的 Test 步带覆盖率门槛：`pnpm exec vitest run --coverage`（阈值与 include / exclude 见 [vitest.config.ts](vitest.config.ts)）
+  - `pnpm check` 跑的是 **CI 的全部步骤 + `check:release`**（红线「`pnpm run check` 覆盖 CI 的每一步」钉着）；
+    CI 的 Test 步另带覆盖率门槛：`pnpm exec vitest run --coverage`（阈值与 include / exclude 见 [vitest.config.ts](vitest.config.ts)）
 - `node_modules/.bin` 为空时按直接路径跑：`node node_modules/typescript/bin/tsc --noEmit`、`node node_modules/tsdown/dist/run.mjs`、`node node_modules/vitest/vitest.mjs run`
 - 链接校验：`python <maintenance-flow>/check-markdown-links.py <本仓> --fragments --refs` —— 本仓不自带脚本，用维护者 skill 目录里那份；[ci.yml](.github/workflows/ci.yml) 不跑这一条，改完文档手工跑
 - 换行校验：`git diff --check` —— 与链接校验一样本仓不带脚本、改完文档手工跑
