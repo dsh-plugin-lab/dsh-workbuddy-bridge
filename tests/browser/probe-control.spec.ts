@@ -346,4 +346,68 @@ describe('WorkBuddyProbeControl', () => {
     })
     expect(view.toJSON()).toBeNull()
   })
+
+  /**
+   * The panel's placement is CSS Anchor Positioning, not JavaScript.
+   *
+   * The control used to call the host's anchored-position hook; the 0.2.2 rc line
+   * removed that export, and because this repo's devDependencies sit one rc
+   * behind the running host the import kept compiling — the failure only appeared
+   * in a browser, and only once a WorkBuddy model was selected. Placement now
+   * comes from two declarations in the stylesheet (`anchor-name` on the trigger,
+   * `position-anchor` on the panel), and the only thing JavaScript supplies is the
+   * anchor *name*, inline, on both elements.
+   *
+   * Asserted here rather than in the DOM because that is where the contract lives:
+   * the panel is portalled, so a missing property on it is not a layout detail —
+   * it is the panel landing in the viewport's top-left corner.
+   */
+  it('wires the panel to the trigger through one inline anchor name, and measures nothing', async () => {
+    stubDocument()
+    const view = await mount('glm-5.3', {
+      consent: true,
+      running: false,
+      models: [row()],
+    })
+    const trigger = bulb(view)!
+    const anchorName = (trigger.props['style'] ?? {})['--dsh-workbuddy-probe-anchor']
+    expect(String(anchorName), '触发器没拿到 anchor-name 属性').toMatch(/^--dsh-workbuddy-probe-/)
+
+    await act(async () => {
+      trigger.props['onClick']()
+    })
+    const panel = view.root.findAllByType('section')[0]
+    expect(panel, '面板没渲染出来').toBeDefined()
+
+    // Same name on both sides: CSS anchors are document-wide, so the panel finds
+    // its trigger by that name alone.
+    expect(panel!.props['style']).toEqual({ '--dsh-workbuddy-probe-anchor': anchorName })
+
+    // No measured coordinates and no "hide until measured" hack: any of these
+    // would mean JS positioning came back (and the bundle would carry the hook).
+    for (const gone of ['left', 'top', 'visibility']) {
+      expect(panel!.props['style'], `面板的 style 里出现了 ${gone}`).not.toHaveProperty(gone)
+    }
+  })
+
+  it('gives two controls two anchor names', async () => {
+    // A shared name would make both panels follow whichever trigger registered
+    // last — the two controls live in the same document.
+    stub.body = signedIn({ probe: { consent: true, running: false, models: [row()] } })
+    const directory = directoryFor({ provider: 'workbuddy', model: 'glm-5.3' })
+    const view = await render(
+      createElement(
+        'div',
+        null,
+        createElement(WorkBuddyProbeControl, { directory, t }),
+        createElement(WorkBuddyProbeControl, { directory, t }),
+      ),
+    )
+    const names = view.root
+      .findAllByType('button')
+      .filter((node) => node.props['aria-expanded'] !== undefined)
+      .map((node) => (node.props['style'] ?? {})['--dsh-workbuddy-probe-anchor'])
+    expect(names.length, '两个控件都应该有触发器').toBe(2)
+    expect(new Set(names).size, '两个控件用了同一个 anchor-name').toBe(2)
+  })
 })

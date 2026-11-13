@@ -34,6 +34,11 @@
   background: transparent;
   cursor: pointer;
   color: var(--dsw-alias-label-secondary);
+  /* This button is the popover's anchor. The name is unique per control and
+     arrives as an inline custom property (see `ANCHOR_PROPERTY` in
+     probe-control.tsx) — CSS anchors are document-wide, so two controls would
+     otherwise both answer to one name. */
+  anchor-name: var(--dsh-workbuddy-probe-anchor);
 }
 
 .trigger:hover:not(:disabled) {
@@ -65,6 +70,24 @@
 
 /* ---- The popover ------------------------------------------------------- */
 
+/* Placement is **CSS Anchor Positioning**, and the numbers are the ones the
+   host's old JS placement hook used before the host removed it (8px gap above
+   the trigger, 12px viewport margins) — the removed symbol's name is kept out
+   of `src/` on purpose, see the redline「浮层定位走 CSS 锚点」: `bottom` measures
+   from the trigger's top edge, `top` also clears the desktop frame's reserved
+   strip so a window with a title bar never hides the card under the chrome, and
+   `align-self: safe end` pins the card to that bottom inset — falling back to
+   the top inset, rather than off-screen, when its content is taller than the
+   space above.
+
+   `height: fit-content` is load-bearing: with both `top` and `bottom` set, an
+   `auto` height would stretch the card over the whole area and alignment would
+   have no free space to work with.
+
+   Horizontally the preference is the trigger's left edge, but a 280–360px card
+   opened from a control near the right edge would leave the viewport, so the
+   `--dsh-workbuddy-probe-flush-end` fallback re-aligns its right edge to the
+   same 12px margin — the clamp the old hook did in JavaScript. */
 /* Skin copied from the host's stat dialog via `dsh-ds-balance`'s balance
    popover. Two layers, and the split is load-bearing:
 
@@ -84,6 +107,16 @@
   isolation: isolate;
   z-index: 1100;
   box-sizing: border-box;
+  /* Which element it hangs off. The name arrives inline, from the control. */
+  position-anchor: var(--dsh-workbuddy-probe-anchor);
+  top: max(12px, var(--dsh-frame-overlay-top, 12px));
+  bottom: max(12px, calc(anchor(top) + 8px));
+  left: max(12px, anchor(left));
+  right: 12px;
+  align-self: safe end;
+  justify-self: start;
+  position-try-fallbacks: --dsh-workbuddy-probe-flush-end;
+  height: fit-content;
   width: max-content;
   min-width: min(280px, calc(100vw - 24px));
   max-width: min(360px, calc(100vw - 24px));
@@ -97,6 +130,14 @@
   line-height: 1.5;
   color: var(--dsw-alias-label-secondary);
   cursor: default;
+}
+
+/* Used when the preferred left edge would push the card past the right margin:
+   the inset-modified area becomes the viewport itself, and the card aligns to
+   its end (right) edge instead. */
+@position-try --dsh-workbuddy-probe-flush-end {
+  left: 12px;
+  justify-self: safe end;
 }
 
 .panel::before {

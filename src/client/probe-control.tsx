@@ -23,11 +23,24 @@
  *   it belongs next to the thing it acts on.
  *
  * The popover surface follows `dsh-ds-balance`'s balance popover, which itself
- * copies the host's own stat dialog: a portal to `document.body`, positioned by
- * the host's `useAnchoredPosition`, dismissed by the host's
- * `useDismissOnOutsidePointer`, skinned with `--dsw-specific-menu` plus
- * `--dsw-menu-backdrop-filter` (the pair the host requires together — fill
+ * copies the host's own stat dialog: a portal to `document.body`, dismissed by
+ * the host's `useDismissOnOutsidePointer`, skinned with `--dsw-specific-menu`
+ * plus `--dsw-menu-backdrop-filter` (the pair the host requires together — fill
  * alone is "translucent but not frosted").
+ *
+ * Its **placement is CSS, not JavaScript**: the trigger carries a unique
+ * `anchor-name`, the panel names it in `position-anchor`, and the insets in
+ * `probe-control.module.css` put the panel 8px above the trigger while keeping
+ * 12px viewport margins. That replaced the host's old anchored-position hook,
+ * which the 0.2.2 rc line **removed** (its migration guide prescribes exactly
+ * this). The dead import kept compiling here because this repo's devDependencies
+ * sit one rc behind the running host, and only threw in the browser — and only
+ * once a WorkBuddy model was actually selected, which is why it stayed latent.
+ * The removed symbol's name is deliberately **not written here**: the bundle
+ * keeps comments, and `tests/redlines.spec.ts` greps the built artifact for it,
+ * so a reintroduced import cannot come back quietly. That is the same trade the
+ * bundle's inline-runtime guard already makes — it too fires on prose, so the
+ * wording of comments in this half is part of the contract.
  *
  * **The filter must not sit on the panel itself**: a non-`none`
  * `backdrop-filter` makes the element the containing block for its fixed
@@ -41,6 +54,7 @@
 import {
   useCallback,
   useEffect,
+  useId,
   useRef,
   useState,
   useSyncExternalStore,
@@ -48,12 +62,7 @@ import {
   type ReactNode,
 } from 'react'
 import { createPortal } from 'react-dom'
-import {
-  Button,
-  Tooltip,
-  useAnchoredPosition,
-  useDismissOnOutsidePointer,
-} from '@deepseek-ai/dsh-client-ui-primitives'
+import { Button, Tooltip, useDismissOnOutsidePointer } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { ModelDirectory } from '@deepseek-ai/dsh-client-ui-model-selection/client'
 import { cardVariantFor } from './variants.ts'
 import type { WorkBuddyCardVariant } from './variants.ts'
@@ -72,15 +81,19 @@ export interface WorkBuddyProbeControlProps {
 const RECONCILE_MS = 60_000
 
 /**
- * What the popover renders on its first frame: positioned but invisible, so the
- * anchor hook can measure it before deciding where it really goes. Copied
- * verbatim from the host's stat dialog via `dsh-ds-balance`.
+ * The custom property that carries this control's anchor name.
+ *
+ * The name itself has to be **unique per instance** — two composers, or a
+ * remount, would otherwise point two panels at one trigger — so it is derived
+ * from `useId` and handed to CSS through this variable. Both the trigger
+ * (`anchor-name`) and the portalled panel (`position-anchor`) read it, which is
+ * how the host's own model picker wires its menu.
+ *
+ * Geometry lives entirely in `probe-control.module.css`: the 8px gap, the 12px
+ * viewport margins, the size caps and the right-edge fallback are all CSS, so
+ * nothing here measures an element or reacts to scroll.
  */
-const MEASURE_STYLE: CSSProperties = { visibility: 'hidden', left: 0, top: 0 }
-
-/** Gap between the control and the popover, and the viewport margin it keeps. */
-const POPOVER_GAP = 8
-const POPOVER_MARGIN = 12
+const ANCHOR_PROPERTY = '--dsh-workbuddy-probe-anchor'
 
 /** One model's row out of the probe section's single list. */
 function effortModelFor(
@@ -290,12 +303,25 @@ function ModelProbe({
   const [fresh, setFresh] = useState<WorkBuddyWebEffortModel>()
   const inFlight = useRef(false)
   const mounted = useRef(false)
+  /**
+   * This control's anchor name, unique per instance.
+   *
+   * Generated here rather than in the panel because the **trigger** is what CSS
+   * anchors onto, and the control exists before the panel does. The panel is
+   * portalled to `document.body`, so it inherits nothing: both elements get the
+   * property inline, and the stylesheet reads it on each side
+   * (`anchor-name` on the trigger, `position-anchor` on the panel).
+   */
+  const anchorStyle: CSSProperties & Record<typeof ANCHOR_PROPERTY, string> = {
+    [ANCHOR_PROPERTY]: `--dsh-workbuddy-probe-${useId().replaceAll(':', '')}`,
+  }
   /** The control itself: the popover's anchor and the "inside" test for dismissal. */
   const rootRef = useRef<HTMLSpanElement>(null)
   /**
    * The panel, portalled to `document.body` so it is not clipped by the composer
-   * row. It is measured by the anchor hook and passed to the outside-pointer test,
-   * which would otherwise read a click on the panel as a click outside it.
+   * row. Passed to the outside-pointer test, which would otherwise read a click
+   * on the panel as a click outside it. Its *placement* needs no ref: CSS anchors
+   * resolve it against the trigger.
    */
   const panelRef = useRef<HTMLElement>(null)
 
@@ -390,17 +416,10 @@ function ModelProbe({
     }
   }
 
-  // Both hooks live above the `visible` early return: hooks may not be skipped,
-  // and a control that comes and goes with the selection must keep a stable
-  // hook order across renders.
-  const position = useAnchoredPosition({
-    open,
-    anchorRef: rootRef,
-    panelRef,
-    side: 'top',
-    gap: POPOVER_GAP,
-    margin: POPOVER_MARGIN,
-  })
+  // The one hook that is still the host's, and it lives above the `visible`
+  // early return: hooks may not be skipped, and a control that comes and goes
+  // with the selection must keep a stable hook order across renders.
+  //
   // The panel is portalled, so it is no longer a DOM descendant of the anchor:
   // without `panelRef` a click inside the panel would count as "outside" and
   // close it.
@@ -451,6 +470,7 @@ function ModelProbe({
         <button
           type="button"
           className={css.trigger}
+          style={anchorStyle}
           aria-label={text}
           aria-busy={busy}
           aria-expanded={open}
@@ -467,13 +487,15 @@ function ModelProbe({
           hit-testing box that would sit over the composer after it closed.
 
           There is no close button and no cancel: the panel explains one action and
-          holds the one button that takes it, so the ways out are the ways out of
-          any popover — click away, press Escape, or click the icon again. */}
+          holds the one button that takes it, so the ways out are the popover's own
+          — a pointer anywhere outside (the host's `useDismissOnOutsidePointer`;
+          that hook is pointer-only, Escape was never one of its exits) or the icon
+          again. */}
       {open
         ? createPortal(
             <ProbePanel
               panelRef={panelRef}
-              style={position ?? MEASURE_STYLE}
+              style={anchorStyle}
               model={model}
               lit={lit}
               levels={levels}
@@ -521,8 +543,13 @@ function ProbePanel({
   onDetect,
   t,
 }: {
-  /** The portalled surface, measured by the anchor hook and used by the dismissal test. */
+  /** The portalled surface, used by the dismissal test. */
   panelRef: React.RefObject<HTMLElement>
+  /**
+   * The anchor property only — placement is CSS. The panel is portalled to
+   * `document.body`, so it inherits nothing from the control; this carries the
+   * anchor name the stylesheet's `position-anchor` reads.
+   */
   style: CSSProperties
   model: string
   lit: boolean

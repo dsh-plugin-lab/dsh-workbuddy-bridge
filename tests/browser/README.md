@@ -12,7 +12,8 @@
   类名带 hash，按**整 token** 匹配（`field` 是 `fieldAction` 的前缀；后者已并入 `action`）
 - probe-control.spec.ts —— composer 推理档位控件：**灯泡亮 = 该模型能切档位**（不是「探测过」），
   已声明档位的模型亮灯但禁用检测，`non-validating` 空灯且面板不谎称「尚未检测」，
-  以及宿主 store 初值 `current: null` 时首帧不抛
+  宿主 store 初值 `current: null` 时首帧不抛，以及**浮层靠一个每次实例唯一的锚点名挂到触发器上**
+  （面板的 style 只该有那个自定义属性，出现 `left`/`top`/`visibility` 就说明 JS 定位又回来了）
 - harness.ts —— 两类替身与助手：
   `useBrowserStubs`（全局 fetch / 定时器 / 环境变量）、`useTree`（React 树与卸载清理）、
   `signedIn` / `textOf` / `buttonLabels` / `clickText` / `expandDisclosure`，

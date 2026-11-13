@@ -46,6 +46,7 @@ src/
 | `ctx.locale` | `settings.workbuddy` 命名空间，zh/en 双语 |
 | 官方 primitives | 卡片壳 `DisclosureRow` + `StateDot`，面板用 `SegmentedTabs` / `Tag` / `Checkbox` / `Button` / `Tooltip`，插件不自带任何手搓控件 |
 | CSS Modules | `*.module.css` 经 lightningcss 编译为 `[hash]_[local]` 类名并注入 `<style>`（`tsdown.config.ts` 里的构建插件复刻了官方链路） |
+| 浮层定位 | **CSS Anchor Positioning**，不是 JavaScript：触发按钮带 `anchor-name`、面板写 `position-anchor`，间隙 / 视口边距 / 尺寸上限全在 `probe-control.module.css`，靠右放不下时由 `@position-try` 兜底。插件不读 `getBoundingClientRect`、不监听 scroll / resize，也不做首帧「先藏后测」。宿主自 0.2.2 起删掉了旧的 JS 定位 hook 并给出同一套迁移，本仓因此不再依赖它 —— 判据是 [../tests/redlines.spec.ts](../tests/redlines.spec.ts) 的「浮层定位走 CSS 锚点」，取舍见[决策记录](../.agents/notes/2026-11-13-popover-placement-css-anchors.md) |
 
 `ctx.slots.inject` 跟随槽位的**声明方**生命周期：宿主没有插件页或没有 composer 时，回调根本不会运行，所以不需要任何版本判断。
 
