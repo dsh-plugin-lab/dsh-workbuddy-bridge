@@ -39,9 +39,18 @@ export const WORKBUDDY_STREAM_IDLE_TIMEOUT_MS = 300_000
  * Image-request budgets at the dsh-llm-pi-ai defaults; the profile type made
  * them required in 0.1.1-rc.2. They bound requests to models whose catalog
  * entry declares `supportsImages`; text-only models never receive images.
+ *
+ * The **retained-count** pair joined them in the 0.2.2 rc line, with the same
+ * defaults the host's own config schema applies: at most 50 image occurrences
+ * per request, overflowing 10 at a time. Both are whole-request bounds on a
+ * deterministic inline request version, so the route simply adopts the host's
+ * defaults rather than inventing tighter ones — crossing them would rewrite
+ * the request prefix, which this route never has a reason to do.
  */
 const REQUEST_IMAGE_BUDGETS = {
   maxRequestImageBytes: 20_971_520,
+  maxRequestImages: 50,
+  imageOffloadCountQuantum: 10,
   requestImagePixelBudget: 4_194_304,
   requestImageMaxBytes: 1_048_576,
 } as const
