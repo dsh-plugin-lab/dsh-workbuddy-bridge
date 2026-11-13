@@ -288,6 +288,111 @@ describe('浏览器半体产物不内联宿主运行时', () => {
 })
 
 /**
+ * 浮层定位：**CSS 锚点，不是 JavaScript**。
+ *
+ * 宿主在 0.2.2 的 rc 线里删掉了 `ui-primitives` 的 `useAnchoredPosition` 值导出
+ * （迁移指南要求改用 CSS Anchor Positioning），本仓当时还在 import 它。它**编译得过**——
+ * 本仓的 devDependencies 比在跑的宿主慢一个 rc，`tsc` 对着旧包照样认这个符号——于是缺陷
+ * 只在浏览器里、且只在用户选中 WorkBuddy 模型（控件真的挂载）时才炸：
+ * `TypeError: ... is not a function`，整个槽条目被宿主边界判为崩溃。
+ *
+ * 所以判据落在**产物**上而不是源码上：源码里留一句注释都可能被打包器原样带下去（`process`
+ * 那条坑同源），而产物里出现这个名字就说明它又被 import 进来了。名字在这里写全，`src/` 里
+ * 只写「宿主已删的那个 hook」—— 见 probe-control.tsx 头部注释。
+ */
+describe('浮层定位走 CSS 锚点', () => {
+  const REMOVED_BY_HOST = 'useAnchoredPosition'
+  const clientPath = new URL('../lib/client.js', import.meta.url)
+  const bundle = existsSync(clientPath) ? readFileSync(clientPath, 'utf8') : undefined
+  const source = read('src/client/probe-control.tsx')
+  const stylesheet = read('src/client/probe-control.module.css')
+
+  /**
+   * 一条规则块的块内容：按**整选择器**匹配，注释先剥掉（本仓每条规则前面都有一段说明，
+   * 注释里出现的 `.trigger` 不该被当成规则）。
+   */
+  function rule(css: string, selector: string): string {
+    const body = css.replace(/\/\*[\s\S]*?\*\//g, '')
+    for (const [, candidate, block] of body.matchAll(/([^{}]+)\{([^{}]*)\}/g)) {
+      if ((candidate ?? '').trim() === selector) return block ?? ''
+    }
+    return ''
+  }
+
+  it('产物里不出现宿主已删的定位 hook', () => {
+    // 产物缺失时不能当「通过」—— 但也别假红：CI 的顺序保证 build 先于 test
+    // （package.json 的 check），本机也按同一顺序跑。
+    expect(bundle, 'lib/client.js 不存在 —— 先跑 pnpm build').toBeDefined()
+    expect(bundle).not.toContain(REMOVED_BY_HOST)
+    // 自检：产物里必须真的有 CSS 锚点语法，否则说明这条扫描读的不是本插件的产物。
+    expect(bundle).toContain('position-anchor')
+  })
+
+  it('源码不再 import 宿主已删的符号', () => {
+    expect(source).not.toContain(REMOVED_BY_HOST)
+    expect(source).not.toContain('AnchoredPositionOptions')
+    // 仍在用的那一个是活的（宿主 rc.2 照样导出它）—— 别把整条 import 删掉。
+    expect(source).toContain('useDismissOnOutsidePointer')
+  })
+
+  it('触发器带 anchor-name，面板用同一个名字做 position-anchor', () => {
+    // 名字只在 TSX 里出现一次（常量），CSS 两侧引用同一个自定义属性；
+    // 任一处理解错都会**静默**：面板落到视口左上角，而不是触发器上方。
+    const anchorProperty = /const ANCHOR_PROPERTY = '(--[\w-]+)'/.exec(source)?.[1]
+    expect(anchorProperty, 'probe-control.tsx 里读不出 ANCHOR_PROPERTY').toBeTruthy()
+
+    const trigger = rule(stylesheet, '.trigger')
+    expect(trigger, '.trigger 没声明 anchor-name，面板就没有锚点').toContain(
+      `anchor-name: var(${anchorProperty})`,
+    )
+
+    const panel = rule(stylesheet, '.panel')
+    expect(panel, '.panel 没声明 position-anchor').toContain(
+      `position-anchor: var(${anchorProperty})`,
+    )
+    // 位置与边距：8px 间隙、12px 视口边距（与改动前那份 hook 的入参一致）。
+    expect(panel).toContain('calc(anchor(top) + 8px)')
+    expect(panel).toContain('top: max(12px, var(--dsh-frame-overlay-top, 12px))')
+    // 尺寸上限沿用改前的两条。
+    expect(panel).toContain('min-width: min(280px, calc(100vw - 24px))')
+    expect(panel).toContain('max-width: min(360px, calc(100vw - 24px))')
+    // 对齐用 safe：空间不够时退回起始边，而不是把内容推到视口外。
+    expect(panel).toContain('align-self: safe end')
+  })
+
+  it('@position-try 兜底名真的被声明（否则靠右的控件会把面板推出视口）', () => {
+    const panel = rule(stylesheet, '.panel')
+    const fallbacks = /position-try-fallbacks:\s*([^;]+);/.exec(panel)?.[1] ?? ''
+    // 自检：确实声明了兜底。
+    expect(fallbacks.trim(), '没声明 position-try-fallbacks').not.toBe('')
+    for (const name of fallbacks
+      .split(',')
+      .map((entry) => entry.trim())
+      .filter((e) => e !== '')) {
+      expect(stylesheet, `${name} 没有对应的 @position-try 规则，兜底是死代码`).toContain(
+        `@position-try ${name} {`,
+      )
+    }
+  })
+
+  it('上面两条判据有牙齿（反向控制）', () => {
+    // ① 产物扫描：一段仍 import 旧 hook 的代码必须命中。
+    const stale = 'const position = useAnchoredPosition({ open, anchorRef, panelRef })'
+    expect(stale.includes(REMOVED_BY_HOST)).toBe(true)
+    expect('const position = useAnchorPlacement({})'.includes(REMOVED_BY_HOST)).toBe(false)
+    // ② 锚点一致性：换个属性名再看，CSS 侧就对不上了。
+    const misnamed = stylesheet.replaceAll(
+      'var(--dsh-workbuddy-probe-anchor)',
+      'var(--something-else)',
+    )
+    expect(misnamed, '变异没落地').not.toBe(stylesheet)
+    expect(rule(misnamed, '.trigger')).not.toContain(
+      `anchor-name: var(${/const ANCHOR_PROPERTY = '(--[\w-]+)'/.exec(source)?.[1] ?? ''})`,
+    )
+  })
+})
+
+/**
  * 插件页的样式纪律。
  *
  * 这一页长在宿主的 Plugins 页里，所以它的字号、间距、圆角、焦点环都应当是**宿主的**，

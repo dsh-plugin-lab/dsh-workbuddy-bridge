@@ -21,7 +21,8 @@
 - probe-control.tsx —— 输入区推理档位控件：**灯泡 = 这个模型现在能不能切档位**（不是「探测过没有」）。
   判据只一条：`efforts.length > 0` ⇔ 灯泡点亮 ⇔ 选择器提供档位，两头同源于 `src/probe/efforts.ts`。
   上游已声明档位的模型**照常显示灯泡但禁用检测**（声明已是答案）；`non-validating` 保持可检测。
-  自绘灯泡墨迹，闪电只在有档位时出现
+  自绘灯泡墨迹，闪电只在有档位时出现。浮层**定位交给 CSS**（见下条）：这里只给触发按钮与面板各写一份
+  每次实例唯一的锚点名，不测矩形、不做首帧隐藏
 - coin-glyph.tsx —— 币图标（细线三枚币，宿主 16 格）。**同一个物件出现在两处**：composer 读数与卡片的积分页；
   两处共用它是为了让读者认出这是同一个数字。图标的布局规则在它自己的 CSS 里，行样式归调用方
 - credit-balance.tsx —— 模型选择器左边的剩余积分；只在会话用 WorkBuddy 模型时显示/取数。
@@ -36,7 +37,11 @@
 - variants.ts —— 两个变体（CN / AI）与卡片路由
 - workbuddy.module.css —— 配置页与卡片的样式
 - coin-glyph.module.css —— 币图标自身的布局（`flex: none`）；它出现在两个页面上，所以规则跟着图标走，不留在调用方的样式表里
-- probe-control.module.css —— 控件与浮层的样式
+- probe-control.module.css —— 控件与浮层的样式。浮层的**定位也在这里**（CSS 锚点，不是 JS）：触发器
+  `anchor-name`、面板 `position-anchor` 共用一个每次实例唯一的自定义属性名；`bottom: calc(anchor(top) + 8px)`
+  是触发器上方的 8px 间隙，`top: max(12px, var(--dsh-frame-overlay-top, 12px))` 与左右 12px 是视口边距，
+  `@position-try` 那条兜底负责「靠右放不下时右对齐」。改这几个数就是改视觉，改前先看
+  [tests/redlines.spec.ts](../../tests/redlines.spec.ts) 的「浮层定位走 CSS 锚点」
 - credit-balance.module.css —— 积分读数的行样式（28px 高、4px 间距、tertiary 墨色、等宽数字）；
   币图标自身的规则在它自己的模块里
 - credit-label.module.css —— 每消息消耗标签的样式
@@ -66,6 +71,10 @@
 - **composer 那一行是两个自绘墨迹并排**：灯泡（能否切档位）与币（剩余积分）。两者都走 `currentColor`、
   都在宿主的 16 格上、都是 16px，且都**不写字**——判据是「同一个 28px 行里读起来像一套」。
   宿主自己的 188 个图标里没有币/额度/钱包形状，所以币是本仓自绘的；改它之前先看 `credit-balance.tsx` 的注释
+- **浮层定位是 CSS 的事，不是 JS 的事**：面板 `createPortal` 到 `document.body`（composer 行会裁掉
+  `position: fixed`），位置由锚点语法算出来。宿主的旧 hook 已在 rc 线里删除，别再引入任何「测矩形再定位」
+  的写法——那条路本仓刚踩过：编译过、测试绿、只有真机选到 WorkBuddy 模型时才崩。
+  连带一条：**浏览器半体的注释也算进产物**，别在 `src/` 里写宿主已删符号的名字（红线扫产物）
 
 变更影响路由：改本目录 → 同步根 [AGENTS.md](../../AGENTS.md) 的待办与活跃坑；设计变化写
 [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md)；样式改动的判据同步

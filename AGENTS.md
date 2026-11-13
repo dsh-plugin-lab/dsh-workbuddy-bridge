@@ -126,6 +126,14 @@
   写一条 **importer** 记录 —— 目录删了记录还在，而**本机 `pnpm install` 不带 `--frozen-lockfile`，
   会静默自愈**，只有 CI 的 frozen 模式才判红（2026-10-02 三平台齐红，失败在第一步 install）。
   判据：`Select-String pnpm-lock.yaml '<目录名>'`；处置：`pnpm install` 重解析（别手工编辑 lockfile）。
+  **最贵的形态是「宿主删了符号而本仓照样编译」**：2026-11-13 修的就是这一种 —— 宿主在 0.2.2 的 rc 线里删掉
+  `primitives` 的 `useAnchoredPosition`，而本仓 devDeps 还停在上一版，`tsc` 全绿、测试全绿，缺陷只在浏览器里、
+  且只在这个组件真的挂载时炸（档位浮层要选中 WorkBuddy 模型才挂载 → 潜伏很久）。
+  **这类缺陷只有产物级判据能拦**；宿主的迁移指南只在它的 rc 线树里，本地检出是旧 tag，要
+  `git show <tag>:docs/upgrade-guide/…` 现读。处置是浮层改用 CSS 锚点，判据见
+  [tests/redlines.spec.ts](tests/redlines.spec.ts) 的「浮层定位走 CSS 锚点」（扫**产物**）；
+  取舍与实测几何见 [.agents/notes/2026-11-13-popover-placement-css-anchors.md](.agents/notes/2026-11-13-popover-placement-css-anchors.md)。
+  连带：**`src/` 里连注释都会进产物**，别在里面写宿主已删符号的名字（与下面 `process` 那条同型）。
 - **浏览器产物里不能出现 `process` 这个词，注释也不行**：`tests/redlines.spec.ts` 拿它当「内联了 React 运行时」的
   signature（2026-09-25 真机事故：整份 react-dom 被内联，顶层 `process.env.NODE_ENV` 在浏览器里抛错）。
   判据是对**整份产物**做正则，**注释同样命中** —— 而打包器会把被引用语句周围的注释一起留下。
