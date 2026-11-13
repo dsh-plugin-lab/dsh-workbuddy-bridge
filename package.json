@@ -172,6 +172,7 @@
     "typescript-eslint": "^8.70.1",
     "unrun": "^0.3.1",
     "vitest": "^4.1.12",
+    "yaml": "^2.9.1",
     "zustand": "^5.0.15"
   }
 }

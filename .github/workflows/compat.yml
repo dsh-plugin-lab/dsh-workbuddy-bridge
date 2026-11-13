@@ -94,8 +94,6 @@ jobs:
           - line: next
             only: '--only 0.2.2'
             blocking: true
-            blocking: false
-            blocking: false
     name: swap (${{ matrix.line }})
     steps:
       - uses: actions/checkout@v7
