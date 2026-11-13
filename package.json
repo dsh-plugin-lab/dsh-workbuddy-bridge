@@ -33,7 +33,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc -p tsconfig.json && tsc -p tsconfig.client.json",
     "check:release": "node scripts/check-release.mjs",
-    "check": "pnpm run typecheck && pnpm run build && pnpm run test"
+    "check": "pnpm run typecheck && pnpm run build && pnpm run test && pnpm run lint && pnpm run format:check && pnpm run check:release"
   },
   "exports": {
     ".": {
