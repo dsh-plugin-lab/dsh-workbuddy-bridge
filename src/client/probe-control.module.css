@@ -71,12 +71,14 @@
 /* ---- The popover ------------------------------------------------------- */
 
 /* Placement is **CSS Anchor Positioning**, and the numbers are the ones the
-   host's old `useAnchoredPosition` used (8px gap above the trigger, 12px
-   viewport margins): `bottom` measures from the trigger's top edge, `top` also
-   clears the desktop frame's reserved strip so a window with a title bar never
-   hides the card under the chrome, and `align-self: safe end` pins the card to
-   that bottom inset — falling back to the top inset, rather than off-screen,
-   when its content is taller than the space above.
+   host's old JS placement hook used before the host removed it (8px gap above
+   the trigger, 12px viewport margins) — the removed symbol's name is kept out
+   of `src/` on purpose, see the redline「浮层定位走 CSS 锚点」: `bottom` measures
+   from the trigger's top edge, `top` also clears the desktop frame's reserved
+   strip so a window with a title bar never hides the card under the chrome, and
+   `align-self: safe end` pins the card to that bottom inset — falling back to
+   the top inset, rather than off-screen, when its content is taller than the
+   space above.
 
    `height: fit-content` is load-bearing: with both `top` and `bottom` set, an
    `auto` height would stretch the card over the whole area and alignment would

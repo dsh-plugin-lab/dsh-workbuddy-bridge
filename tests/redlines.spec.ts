@@ -335,6 +335,30 @@ describe('浮层定位走 CSS 锚点', () => {
     expect(source).toContain('useDismissOnOutsidePointer')
   })
 
+  it('`src/client/` 里一个文件都不出现那个名字（注释也算）', () => {
+    /*
+     * 比上面那条更宽，因为「只有这一个文件」是靠不住的：浏览器半体的任何文件都可能
+     * 重新 import 它，而**注释会原样进产物**。名字写在这里（测试文件不进产物），
+     * `src/` 里只用「宿主已删的那个 hook」来指代。
+     */
+    const offenders: string[] = []
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(new URL(`../${dir}`, import.meta.url), {
+        withFileTypes: true,
+      })) {
+        const path = `${dir}/${entry.name}`
+        if (entry.isDirectory()) {
+          walk(path)
+          continue
+        }
+        if (!/\.(ts|tsx|css)$/.test(entry.name)) continue
+        if (read(path).includes(REMOVED_BY_HOST)) offenders.push(path)
+      }
+    }
+    walk('src/client')
+    expect(offenders, 'src/client 里出现了宿主已删的符号名（注释同样算）').toEqual([])
+  })
+
   it('触发器带 anchor-name，面板用同一个名字做 position-anchor', () => {
     // 名字只在 TSX 里出现一次（常量），CSS 两侧引用同一个自定义属性；
     // 任一处理解错都会**静默**：面板落到视口左上角，而不是触发器上方。
