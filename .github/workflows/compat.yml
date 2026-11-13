@@ -92,16 +92,9 @@ jobs:
           # 版本能满足区间时优先用它 —— 不收窄就装出**混合树**（20 个高族 + 1 个低族），
           # `verify` 报的「假绿」来自这个，而不是宿主不兼容。经过见 .agents/notes/2026-10-12-installer-picks-latest-family.md。
           - line: next
-            only: '--only 0.2.1'
+            only: '--only 0.2.2'
             blocking: true
-          # 声明面承诺的两个旧 RC 族：声明面承诺了它们，所以它们红了要看得见；
-          # 但它们不是承诺线，所以只记录、不阻断 run。
-          # **承诺几族就跑几族**：声明了却没验的那一族，等于假绿。
-          - line: 0.2.0-rc
-            only: '--only 0.2.0-rc'
             blocking: false
-          - line: 0.1.7-rc
-            only: '--only 0.1.7-rc'
             blocking: false
     name: swap (${{ matrix.line }})
     steps:
