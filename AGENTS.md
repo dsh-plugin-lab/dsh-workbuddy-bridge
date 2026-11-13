@@ -77,6 +77,13 @@
   「hides the group when the credential disappears…」清理临时目录时删不掉
   `.workbuddy-host-heartbeat.json`，子进程句柄还没释放。撞到就重跑，别当成自己的改动有问题。
   根因在清理逻辑：应改成删除失败重试、或先等句柄释放再删目录。
+- [ ] **`macos` 格的「切账号 + 刷新失败」偶发红（见过一次，未定位）**：`tests/catalog-lifecycle.spec.ts` 的
+  「stops serving the old account after a switch even when the refresh fails…」断言
+  `expected [ 'acct-a-model' ] to not include 'acct-a-model'` —— 切到 B、刷新失败后 A 的模型仍在服务。
+  2026-11-13 一次 `main` 推送里 **ubuntu 与 windows 同跑都绿、只有 macos 红**，`gh run rerun --failed` 后绿，
+  所以更像**慢机器上的时序**而不是逻辑错（那条用例靠 `vi.waitFor` 等目录切换，且与 sweep 的重试同场竞争）。
+  **撞到先重跑**，别当成自己改动的问题；但如果它第二次出现，就不再是 flaky —— 那说明「刷新失败后仍服务旧账号」
+  真的是个竞态，要按缺陷查（判据本身是该仓 reviewer 提的第二条发现，不是可放松的断言）。
 
 ## 活跃坑
 
