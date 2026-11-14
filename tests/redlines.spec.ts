@@ -670,95 +670,51 @@ describe('客户端接缝', () => {
 })
 
 describe('发布流程', () => {
-  const workflows = existsSync(new URL('../.github/workflows', import.meta.url))
-    ? readdirSync(new URL('../.github/workflows', import.meta.url))
-    : []
-
-  it('release.yml 里不得出现改写版本的调用（bump 是发布前的独立一步）', () => {
-    if (!workflows.includes('release.yml')) return
-    const release = read('.github/workflows/release.yml')
-    expect(release).not.toMatch(/npm version (patch|minor|major)/)
-  })
-
-  it('上面那条检测器有牙齿（反向控制）', () => {
-    const detector = (text: string) => /npm version (patch|minor|major)/.test(text)
-    expect(detector('run: npm version patch --no-git-tag-version')).toBe(true)
-    expect(detector('run: npm publish')).toBe(false)
-  })
-
   /**
-   * 发布链的**行为底线**（跨仓一致）：手动与 tag 两个入口、正文读 Drafter 草稿、发完删草稿、OIDC 发包。
+   * 判据：**发布链是共享的**，本仓的 `release.yml` 只是薄壳（组织判据 `release-caller-intact`）。
    *
-   * 为什么要钉成断言而不是留在散文里：这四条漏掉时**都不报错** ——
-   * tag 触发那条判据没带事件守卫，红的是每一次 tag 发布而不是某次改动；
-   * 草稿没删，下一版读到的是上一批正文，而草稿看上去「有内容」；
-   * 草稿读不到而没发 warning，则「发版成功但正文走了回落」与「一切正常」长得一模一样。
-   * 散文留不住这种，判据留得住。
+   * 为什么行为断言搬走了：两个入口、tag 形状、草稿的读与删、守卫基线排除、事件守卫、不改版本号 ——
+   * 这些判的本来是**真正执行的那份文件**。薄壳里没有那些步骤，同样的断言留在这里就变成
+   * 「因为没有东西可读所以绿」，比红更坏。它们现在在组织仓的 `scripts/lib/release-flow.mjs`，
+   * 由 `check-criteria.mjs` 对着 `release-publish.yml` 核。
+   *
+   * 这里只判薄壳自己必须保住的东西：那次调用，以及 npm 认的两个字面量。
    */
-  it('四条行为底线都在（入口 / 读草稿 / 删草稿 / OIDC）', () => {
-    if (!workflows.includes('release.yml')) return
-    const release = read('.github/workflows/release.yml')
+  const source = () => read('.github/workflows/release.yml')
 
-    // ① 两个入口：手动 dispatch 与 tag 推送。
-    expect(release, '没有手动触发入口').toMatch(/workflow_dispatch:/)
-    expect(release, '没有 tag 触发入口').toMatch(/tags:\s*\n\s*-\s*'v\[0-9\]\*'/)
-
-    // ② 正文读草稿，且**读不到时必须发 warning**（区分「读不到」与「读到但为空」）。
-    expect(release, '没有读 Release Drafter 草稿的步骤').toContain('gh release view next')
-    expect(release, '草稿读不到时没有 warning —— 那就成了静默回落').toMatch(
-      /warning::读不到 Release Drafter 草稿/,
-    )
-    expect(release, '正文没有走草稿那一路').toContain('--notes-file')
-
-    // ③ 发完删草稿。
-    expect(release, '没有删除草稿的步骤').toContain('gh release delete')
-    // 删的**必须**只删草稿：--cleanup-tag 默认连带删 tag，这里显式关掉。
-    expect(release, '删草稿时没有关掉 --cleanup-tag，会连带删掉 tag').toContain(
-      '--cleanup-tag=false',
-    )
-
-    // ④ OIDC：全程不传 token。
-    expect(release, '没有 id-token: write，OIDC 换不出凭据').toMatch(/id-token:\s*write/)
-    expect(release, '出现了 token 传递，底线要求全程不传 token').not.toMatch(
-      /NODE_AUTH_TOKEN|NPM_TOKEN/,
+  it('调用组织仓的共享发布链，而不是自带一份副本', () => {
+    expect(source(), '没有调用共享发布链').toContain(
+      'uses: dsh-plugin-lab/.github/.github/workflows/release-publish.yml@',
     )
   })
 
-  it('tag 触发的两道闸都在（缺一条时每次 tag 发布都红，且红的原因不明显）', () => {
-    if (!workflows.includes('release.yml')) return
-    const release = read('.github/workflows/release.yml')
-
-    // ① 守卫的基线要**排除正在发的那个 tag**。少了它，tag 触发时 `describe` 解析出它自己，
-    //    `<tag>..HEAD` 恒空，一次完全正常的发布被判成「没有可发布的内容」（2026-09-26 实踩）。
-    expect(release, '守卫基线没有排除正在发的 tag').toMatch(
-      /--exclude=\$\{\{\s*github\.ref_name\s*\}\}/,
+  it('保住 npm 认的那三个字面量：文件名、id-token、environment 名', () => {
+    // 三者任一不符，registry 都只回一个 404，且不说原因 —— 实测三次：TP 不存在、文件名差、
+    // 环境名差，报的是同一句话。所以它们必须被钉住，不能靠改的时候记得。
+    const workflow = source()
+    expect(workflow, '没有为被调用的 job 转发 id-token').toMatch(/id-token:\s*write/)
+    expect(workflow, 'environment 名必须与 npm 上的 Trusted Publisher 逐字一致').toMatch(
+      /environment:\s*release\b/,
     )
-
-    // ② 「只接受 main」那道判定要带事件守卫。少了它，tag 触发时 github.ref 是 refs/tags/...，
-    //    每一次 tag 发布都红。
-    expect(release, '「只接受 main」的判定没有事件守卫').toMatch(
-      /github\.event_name\s*==\s*'workflow_dispatch'\s*&&\s*github\.ref\s*!=\s*'refs\/heads\/main'/,
+    expect(workflow, '两个入口必须留在本仓，否则这个 workflow 永远不会被触发').toMatch(
+      /workflow_dispatch:/,
     )
+    expect(workflow, '没有 tag 触发入口').toMatch(/tags:\s*\n\s*-\s*'v\[0-9\]\*'/)
   })
 
-  it('上面那两条判据有牙齿（拿缺了这两样的写法比对，必须不满足）', () => {
-    // 反向控制一：没有 --exclude 的守卫。
-    const noExclude =
-      '      - name: Guard against release noise\n' +
-      '        run: |\n' +
-      "          base=$(git describe --tags --abbrev=0 --match 'v[0-9]*')\n"
-    expect(noExclude).not.toMatch(/--exclude=\$\{\{\s*github\.ref_name\s*\}\}/)
+  it('薄壳自己也不得改写版本号', () => {
+    const writes = source()
+      .split('\n')
+      .filter((line) => !/^\s*#/.test(line))
+      .filter((line) => /(npm|pnpm)\s+version\b|npm\s+pkg\s+set\b/.test(line))
+    expect(writes, '发布流程里出现了会改版本的命令').toEqual([])
+  })
 
-    // 反向控制二：没有事件守卫的 main 判定。
-    const noEventGuard = "        if: github.ref != 'refs/heads/main'\n"
-    expect(noEventGuard).not.toMatch(
-      /github\.event_name\s*==\s*'workflow_dispatch'\s*&&\s*github\.ref\s*!=\s*'refs\/heads\/main'/,
-    )
-    // 而真文件里的那行必须满足 —— 判据不是「永远为真」。
-    const release = read('.github/workflows/release.yml')
-    expect(release).toMatch(
-      /github\.event_name\s*==\s*'workflow_dispatch'\s*&&\s*github\.ref\s*!=\s*'refs\/heads\/main'/,
-    )
+  it('上面三条有牙齿（自带整份副本、写死环境名之外的写法必须不满足）', () => {
+    const localCopy = 'name: Release\non:\n  push:\n    tags:\n      - "v[0-9]*"\n'
+    expect(localCopy).not.toContain('release-publish.yml@')
+    expect('      environment: github-release\n').not.toMatch(/environment:\s*release\b/)
+    expect('      - run: npm version patch\n').toMatch(/(npm|pnpm)\s+version\b/)
   })
 })
 
