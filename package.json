@@ -11,7 +11,9 @@
     "workbuddy",
     "models",
     "llm",
-    "bridge"
+    "bridge",
+    "model-provider",
+    "gateway"
   ],
   "type": "module",
   "engines": {
