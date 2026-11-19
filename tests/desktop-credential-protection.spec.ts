@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   WorkBuddyAtRestKeyProvider,
   WORKBUDDY_ELECTRON_BIN_ENV,
+  aiAppDiscovery,
   buildAuthenticatedContextAad,
   classifyDesktopAuthDocument,
   cnAppDiscovery,
@@ -334,7 +335,7 @@ describe('at-rest key provider', () => {
     )
   })
 
-  it('picks the store default discovery by variant, and never for Global', () => {
+  it('picks the store default discovery by variant, and one product at a time', () => {
     /*
      * Regression, 2026-10-03, found by the release checklist rather than by a
      * test: `WorkBuddyCredentialStore`'s default key provider used to be a bare
@@ -346,11 +347,13 @@ describe('at-rest key provider', () => {
      *
      * The rule now has one home — `atRestDiscoveryFor` — and this pins it:
      * CN (and a variantless store, which reads the CN product's default file)
-     * may look for the app; Global must not, because a Global unlock must never
-     * silently execute the CN app's Electron.
+     * may look for the app; Global gets `aiAppDiscovery()`, which is Windows-only
+     * (issue #44). A Global unlock must still never silently execute the CN app's
+     * Electron, and `aiAppDiscovery()` is what guarantees that: off Windows it
+     * answers `'none'`, because the only strategy there is a CN bundle-id search.
      */
     expect(atRestDiscoveryFor(CN_VARIANT)).toBe(cnAppDiscovery())
-    expect(atRestDiscoveryFor(AI_VARIANT)).toBe('none')
+    expect(atRestDiscoveryFor(AI_VARIANT)).toBe(aiAppDiscovery())
     expect(atRestDiscoveryFor(undefined)).toBe(cnAppDiscovery())
     // The provider's own no-arg default stays 'none' — that narrowing is what
     // keeps a provider that was never told which product it serves from reaching
