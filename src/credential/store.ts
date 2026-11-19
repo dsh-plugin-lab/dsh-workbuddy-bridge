@@ -17,6 +17,7 @@ import { regionOf } from '../protocol/client.ts'
 import {
   WorkBuddyAtRestKeyProvider,
   WorkBuddyElectronPathError,
+  aiAppDiscovery,
   classifyDesktopAuthDocument,
   cnAppDiscovery,
   keyIdsOf,
@@ -28,9 +29,10 @@ import type {
   DesktopAuthClassification,
   DesktopAuthFormat,
   WorkBuddyElectronDiscovery,
+  WorkBuddyElectronProduct,
 } from '../credential/at-rest.ts'
 import type { WorkBuddySignedOutReasonCode } from '../shared/paths.ts'
-import { CN_VARIANT } from '../variants.ts'
+import { AI_VARIANT, CN_VARIANT } from '../variants.ts'
 import type { WorkBuddyVariant } from '../variants.ts'
 import type { WorkBuddyRefreshOutcome } from '../protocol/client.ts'
 
@@ -374,18 +376,24 @@ function isENOENT(error: unknown): boolean {
  * (2026-10-03, found by the release checklist). The store knows its variant, so
  * the choice belongs here.
  *
- * Why the difference is deliberate:
+ * Why the two products are treated differently:
  *
- * - Only the CN WorkBuddy install has been verified to hold the key its envelopes
- *   name, and only its macOS/Windows layout is known, so CN may look for the app.
- * - A Global (WorkBuddy AI) encrypted credential has never been seen live, so that
- *   variant runs at `'none'` — no default path and no app search. A Global unlock
- *   must not silently execute the *CN* app's Electron. An explicit
- *   `WORKBUDDY_ELECTRON_BIN` still works for Global.
+ * - CN may use every verified strategy: its macOS bundle id and its Windows
+ *   Uninstall registration are both known.
+ * - Global (WorkBuddy AI) gets `aiAppDiscovery()`: Windows only, because the
+ *   Uninstall registration names the product and can therefore prove it found
+ *   the Global install. Its credential *is* the same encrypted-envelope format —
+ *   verified against WorkBuddy AI 5.11.4, whose envelopes name the same key id
+ *   the CN install resolves to — so it must be openable, but the search must
+ *   still be answerable per product. The macOS Spotlight lookup is a CN bundle-id
+ *   search with no verified Global counterpart, so it stays `'none'` there: a
+ *   Global unlock must not silently execute the *CN* app's Electron.
  *
  * **No variant** means the CN product's own default file —
  * `defaultDesktopAuthCandidates()` is the `workbuddy-desktop.info` path, never the
  * AI one — so it gets the same discovery CN does.
+ *
+ * An explicit `WORKBUDDY_ELECTRON_BIN` still overrides every strategy.
  *
  * A keyId mismatch is still reported as a diagnosis rather than a wrong open, and
  * the helper only runs if an encrypted credential is actually read.
@@ -393,7 +401,18 @@ function isENOENT(error: unknown): boolean {
 export function atRestDiscoveryFor(
   variant: WorkBuddyVariant | undefined,
 ): WorkBuddyElectronDiscovery {
-  return variant === undefined || variant.id === CN_VARIANT.id ? cnAppDiscovery() : 'none'
+  if (variant === undefined || variant.id === CN_VARIANT.id) return cnAppDiscovery()
+  return aiAppDiscovery()
+}
+
+/**
+ * Which product a variant's key discovery must look for on Windows.
+ *
+ * Everything unknown is read as CN: that is the product whose default auth file
+ * `defaultDesktopAuthCandidates()` already names, so the two answers agree.
+ */
+export function atRestProductFor(variant: WorkBuddyVariant | undefined): WorkBuddyElectronProduct {
+  return variant !== undefined && variant.id === AI_VARIANT.id ? 'ai' : 'cn'
 }
 
 /**
@@ -425,7 +444,10 @@ export class WorkBuddyCredentialStore {
         : workbuddyOwnAuthPath())
     this.keyProvider =
       options.keyProvider ??
-      new WorkBuddyAtRestKeyProvider({ discovery: atRestDiscoveryFor(options.variant) })
+      new WorkBuddyAtRestKeyProvider({
+        discovery: atRestDiscoveryFor(options.variant),
+        product: atRestProductFor(options.variant),
+      })
     this.desktopPathOverride = options.desktopPath
   }
 
