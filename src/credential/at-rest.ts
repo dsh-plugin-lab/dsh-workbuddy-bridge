@@ -51,11 +51,38 @@ const MACOS_ELECTRON_PATH = '/Applications/WorkBuddy.app/Contents/MacOS/Electron
  * installer here put it at the drive root (`E:\WorkBuddy`), so the registry's
  * `DisplayIcon` is consulted as well — see {@link windowsElectronCandidates}.
  */
-/** The Electron runtime as the Windows installer ships it — there is no `Electron.exe`. */
-const WINDOWS_ELECTRON_FILENAME = 'WorkBuddy.exe'
+/**
+ * Which WorkBuddy product a Windows discovery pass is looking for.
+ *
+ * The two products are separate installs with separate directory names and
+ * separate executable names, so "the WorkBuddy app" is ambiguous on a machine
+ * that has both. Discovery therefore runs *per product*: it never falls back
+ * from one to the other, because a CN binary can only answer for CN envelopes.
+ */
+export type WorkBuddyElectronProduct = 'cn' | 'ai'
 
-/** Where the 5.6.2 installer puts the app unless the user picks another drive. */
-const WINDOWS_LOCAL_PROGRAM_SUFFIX = ['Programs', 'WorkBuddy', WINDOWS_ELECTRON_FILENAME] as const
+/**
+ * The Electron runtime each Windows installer ships, keyed by product.
+ *
+ * Both are the runtime itself — there is no `Electron.exe`, and the launcher is
+ * the runtime (it honours `ELECTRON_RUN_AS_NODE`, which is what the key helper
+ * relies on).
+ *
+ * The Global app is `WorkBuddyAI.exe` inside `Programs\\WorkBuddyAI` — no space,
+ * and *not* `Programs\\WorkBuddy`, which is the CN layout. Verified against
+ * WorkBuddy AI 5.11.4; the CN name is the 5.6.2 one.
+ */
+const WINDOWS_ELECTRON_FILENAME: Readonly<Record<WorkBuddyElectronProduct, string>> = {
+  cn: 'WorkBuddy.exe',
+  ai: 'WorkBuddyAI.exe',
+}
+
+/** Where each Windows installer puts the app unless the user picks another drive. */
+const WINDOWS_LOCAL_PROGRAM_SUFFIX: Readonly<Record<WorkBuddyElectronProduct, readonly string[]>> =
+  {
+    cn: ['Programs', 'WorkBuddy', 'WorkBuddy.exe'],
+    ai: ['Programs', 'WorkBuddyAI', 'WorkBuddyAI.exe'],
+  }
 
 /**
  * The Electron binary one discovery strategy expects at its default location, or
@@ -73,12 +100,13 @@ const WINDOWS_LOCAL_PROGRAM_SUFFIX = ['Programs', 'WorkBuddy', WINDOWS_ELECTRON_
  */
 export function defaultWorkBuddyElectronPath(
   discovery: WorkBuddyElectronDiscovery = 'none',
+  product: WorkBuddyElectronProduct = 'cn',
 ): string | undefined {
   if (discovery === 'macos-workbuddy' && process.platform === 'darwin') return MACOS_ELECTRON_PATH
   if (discovery === 'windows-workbuddy' && process.platform === 'win32') {
     const localAppData = process.env['LOCALAPPDATA']?.trim()
     if (localAppData !== undefined && localAppData !== '') {
-      return join(localAppData, ...WINDOWS_LOCAL_PROGRAM_SUFFIX)
+      return join(localAppData, ...WINDOWS_LOCAL_PROGRAM_SUFFIX[product])
     }
   }
   return undefined
@@ -395,6 +423,22 @@ export function cnAppDiscovery(): WorkBuddyElectronDiscovery {
   return 'none'
 }
 
+/**
+ * The strategy the Global (WorkBuddy AI) app may use on this platform.
+ *
+ * Windows only, and deliberately narrower than {@link cnAppDiscovery}: the
+ * Uninstall registration names the product, so a Global search can prove it is
+ * looking at the Global install instead of borrowing the CN one. The macOS
+ * lookup is a Spotlight search for the *CN* bundle id, which has no verified
+ * Global counterpart — a Global provider keeps `'none'` there rather than
+ * executing the other product's binary. An explicit `WORKBUDDY_ELECTRON_BIN`
+ * still works on every platform.
+ */
+export function aiAppDiscovery(): WorkBuddyElectronDiscovery {
+  if (process.platform === 'win32') return 'windows-workbuddy'
+  return 'none'
+}
+
 /** The CN app's bundle id; the only one this round resolves by discovery. */
 export const WORKBUDDY_CN_BUNDLE_ID = 'com.tencent.workbuddy.mac'
 
@@ -468,6 +512,14 @@ export interface WorkBuddyAtRestKeyProviderOptions {
    */
   discovery?: WorkBuddyElectronDiscovery
   /**
+   * Which product this provider serves, for the Windows layout and registry
+   * identity. Defaults to `'cn'` — the product every earlier release served —
+   * so an existing caller that says nothing keeps its behaviour. A Global
+   * (WorkBuddy AI) provider must pass `'ai'`: the two installs have different
+   * directory and executable names, and the CN executable cannot stand in.
+   */
+  product?: WorkBuddyElectronProduct
+  /**
    * Platform default binary, consulted only when `discovery` is enabled and no
    * explicit path is configured. Injectable so tests can force the fallback
    * branch without moving the real app; `null` means "no default here".
@@ -510,6 +562,30 @@ export interface WorkBuddyWindowsDiscoveryTools {
 }
 
 /**
+ * Whether a registration's `DisplayName` belongs to the product being searched.
+ *
+ * The two products register as `WorkBuddy <version>` and `WorkBuddy AI <version>`
+ * on the same machine, so the CN prefix match would also accept the Global entry
+ * — and then `join(root, 'WorkBuddy.exe')` would simply miss, turning a
+ * *decidable* "wrong product" into a misleading "not installed". Matching the
+ * product exactly keeps each variant's answer about its own app.
+ *
+ * A name that carries a trailing qualifier is not the app: "WorkBuddy AI Helper"
+ * and "WorkBuddyUninstall" both fail the version/end boundary, so a component of
+ * the product can never be read as the product itself.
+ */
+function matchesProduct(displayName: string, product: WorkBuddyElectronProduct): boolean {
+  const appName = product === 'ai' ? 'WorkBuddy AI' : 'WorkBuddy'
+  if (!displayName.startsWith(appName)) return false
+  // What follows the product name must be a version or nothing at all. A plain
+  // prefix test is not enough: `WorkBuddy AI 5.11.4` starts with `WorkBuddy`,
+  // so a CN search would claim the Global installation, and `WorkBuddyUninstall`
+  // would pose as the app itself.
+  const rest = displayName.slice(appName.length)
+  return rest === '' || /^\s+\d/u.test(rest)
+}
+
+/**
  * Install directories named by one `reg query` dump, in listing order.
  *
  * `reg query <hive> /s /f WorkBuddy` prints one block per matching key: a
@@ -527,13 +603,16 @@ export interface WorkBuddyWindowsDiscoveryTools {
  * Exported for tests: the flow's whole decision surface is here, so it can be
  * exercised without running `reg.exe`.
  */
-export function windowsInstallsFromRegistry(output: string): string[] {
+export function windowsInstallsFromRegistry(
+  output: string,
+  product: WorkBuddyElectronProduct = 'cn',
+): string[] {
   const roots: string[] = []
   let name: string | undefined
   let icon: string | undefined
   let location: string | undefined
   const flush = (): void => {
-    if (name !== undefined && /^WorkBuddy\b/u.test(name)) {
+    if (name !== undefined && matchesProduct(name, product)) {
       const root = iconRootOf(icon) ?? locationRootOf(location)
       if (root !== undefined && !roots.includes(root)) roots.push(root)
     }
@@ -610,7 +689,9 @@ function locationRootOf(value: string | undefined): string | undefined {
  * read as "not installed". A hive that simply holds no WorkBuddy entry is a
  * normal empty result: `reg` reports that with exit code 1 and empty stdout.
  */
-export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools {
+export function workBuddyWindowsDiscoveryTools(
+  product: WorkBuddyElectronProduct = 'cn',
+): WorkBuddyWindowsDiscoveryTools {
   return {
     findInstallRoots: async (signal) => {
       const found: string[] = []
@@ -652,7 +733,7 @@ export function workBuddyWindowsDiscoveryTools(): WorkBuddyWindowsDiscoveryTools
             },
           )
         })
-        found.push(...windowsInstallsFromRegistry(output))
+        found.push(...windowsInstallsFromRegistry(output, product))
       }
       return found
     },
@@ -785,6 +866,7 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
   private readonly explicitPath: string | undefined
   private readonly defaultPath: string | undefined
   private readonly discovery: WorkBuddyElectronDiscovery
+  private readonly product: WorkBuddyElectronProduct
   private readonly tools: WorkBuddyDiscoveryTools
   /** Explicit `tools` means the caller owns the platform question (tests, custom hosts). */
   private readonly toolsAreInjected: boolean
@@ -812,13 +894,14 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
     // an error, not an invitation to go looking for another app.
     this.explicitPath = options.electronPath ?? envPath
     this.discovery = options.discovery ?? 'none'
+    this.product = options.product ?? 'cn'
     this.defaultPath =
       options.defaultElectronPath === undefined
-        ? defaultWorkBuddyElectronPath(this.discovery)
+        ? defaultWorkBuddyElectronPath(this.discovery, this.product)
         : (options.defaultElectronPath ?? undefined)
     this.tools = options.tools ?? workBuddyDiscoveryTools()
     this.toolsAreInjected = options.tools !== undefined
-    this.windowsTools = options.windowsTools ?? workBuddyWindowsDiscoveryTools()
+    this.windowsTools = options.windowsTools ?? workBuddyWindowsDiscoveryTools(this.product)
     this.windowsToolsAreInjected = options.windowsTools !== undefined
     this.discoveryBudgetMs = options.discoveryBudgetMs ?? WORKBUDDY_DISCOVERY_BUDGET_MS
     this.timeoutMs = options.timeoutMs ?? 10_000
@@ -1055,14 +1138,19 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
   }
 
   /**
-   * Resolve the CN app from its Windows registration.
+   * Resolve this provider's product from its Windows registration.
    *
    * There is no second identity check as on macOS: the registration *is* the
    * identity — {@link windowsInstallsFromRegistry} only accepts blocks whose
-   * `DisplayName` starts with `WorkBuddy` — and the executable is a fixed name
+   * `DisplayName` names this product — and the executable is a fixed name
    * inside the registered directory. A registered directory that no longer holds
    * an executable is a decidable exclusion, the same way a Spotlight row for a
    * deleted app is.
+   *
+   * Both products may be installed side by side and register under the same
+   * `WorkBuddy` stem, so the registry query results are filtered by product
+   * before the executable is looked for: otherwise the Global app's directory
+   * would be probed for a CN executable and read as "not installed".
    */
   private async discoverWindowsApp(): Promise<string> {
     if (process.platform !== 'win32' && !this.windowsToolsAreInjected) {
@@ -1083,7 +1171,7 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
       }
       const seen = new Map<string, string>()
       for (const root of roots) {
-        const electronPath = join(root, WINDOWS_ELECTRON_FILENAME)
+        const electronPath = join(root, WINDOWS_ELECTRON_FILENAME[this.product])
         if (!isExecutable(electronPath)) continue
         let identity: string
         try {
@@ -1142,77 +1230,3 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
                   : 'could not be started'
             reject(
               new WorkBuddyElectronPathError(
-                'encrypted-credential-unreadable',
-                `the WorkBuddy key helper (${electronPath}) ${reason}`,
-              ),
-            )
-            return
-          }
-          const output = stdout.trim()
-          if (output === '') {
-            reject(
-              new WorkBuddyElectronPathError(
-                'encrypted-credential-unreadable',
-                `the WorkBuddy key helper (${electronPath}) produced no payload`,
-              ),
-            )
-            return
-          }
-          resolve(output)
-        },
-      )
-    })
-  }
-}
-
-/** Whether a path exists and is executable; never throws. */
-function isExecutable(path: string): boolean {
-  try {
-    accessSync(path, constants.X_OK)
-    return true
-  } catch {
-    return false
-  }
-}
-
-/**
- * A failure the card must be able to classify. The code travels with the error
- * so the store can promote it to `reasonCode` without re-deriving the cause
- * from prose.
- */
-export class WorkBuddyElectronPathError extends Error {
-  readonly reasonCode: WorkBuddySignedOutReasonCode
-
-  constructor(reasonCode: WorkBuddySignedOutReasonCode, message: string) {
-    super(message)
-    this.name = 'WorkBuddyElectronPathError'
-    this.reasonCode = reasonCode
-  }
-}
-
-/** Read the reason code off an arbitrary thrown value, when it carries one. */
-export function reasonCodeOf(error: unknown): WorkBuddySignedOutReasonCode | undefined {
-  return error instanceof WorkBuddyElectronPathError ? error.reasonCode : undefined
-}
-
-/** Whether a filesystem error reports an absent path (`existsSync` cannot tell). */
-function isENOENT(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
-}
-
-function discoveryIncomplete(detail: string): WorkBuddyElectronPathError {
-  return new WorkBuddyElectronPathError(
-    'electron-discovery-incomplete',
-    `the WorkBuddy application search did not finish (${detail});` +
-      ' this is not proof that the app is missing',
-  )
-}
-
-/**
- * The helper: run inside WorkBuddy's Electron as plain Node, where the
- * private `workbuddyStorage` binding exists, and print only the payload. It
- * writes nothing else, so whatever reaches stdout is the payload.
- */
-const HELPER_SCRIPT =
-  'process.stdout.write(String(process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()))'
-const HELPER_SCRIPT_ARGUMENT_FLAG = '-e'
