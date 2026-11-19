@@ -1230,3 +1230,77 @@ export function workBuddyDiscoveryTools(): WorkBuddyDiscoveryTools {
                   : 'could not be started'
             reject(
               new WorkBuddyElectronPathError(
+                'encrypted-credential-unreadable',
+                `the WorkBuddy key helper (${electronPath}) ${reason}`,
+              ),
+            )
+            return
+          }
+          const output = stdout.trim()
+          if (output === '') {
+            reject(
+              new WorkBuddyElectronPathError(
+                'encrypted-credential-unreadable',
+                `the WorkBuddy key helper (${electronPath}) produced no payload`,
+              ),
+            )
+            return
+          }
+          resolve(output)
+        },
+      )
+    })
+  }
+}
+
+/** Whether a path exists and is executable; never throws. */
+function isExecutable(path: string): boolean {
+  try {
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * A failure the card must be able to classify. The code travels with the error
+ * so the store can promote it to `reasonCode` without re-deriving the cause
+ * from prose.
+ */
+export class WorkBuddyElectronPathError extends Error {
+  readonly reasonCode: WorkBuddySignedOutReasonCode
+
+  constructor(reasonCode: WorkBuddySignedOutReasonCode, message: string) {
+    super(message)
+    this.name = 'WorkBuddyElectronPathError'
+    this.reasonCode = reasonCode
+  }
+}
+
+/** Read the reason code off an arbitrary thrown value, when it carries one. */
+export function reasonCodeOf(error: unknown): WorkBuddySignedOutReasonCode | undefined {
+  return error instanceof WorkBuddyElectronPathError ? error.reasonCode : undefined
+}
+
+/** Whether a filesystem error reports an absent path (`existsSync` cannot tell). */
+function isENOENT(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException | null)?.code === 'ENOENT'
+}
+
+function discoveryIncomplete(detail: string): WorkBuddyElectronPathError {
+  return new WorkBuddyElectronPathError(
+    'electron-discovery-incomplete',
+    `the WorkBuddy application search did not finish (${detail});` +
+      ' this is not proof that the app is missing',
+  )
+}
+
+/**
+ * The helper: run inside WorkBuddy's Electron as plain Node, where the
+ * private `workbuddyStorage` binding exists, and print only the payload. It
+ * writes nothing else, so whatever reaches stdout is the payload.
+ */
+const HELPER_SCRIPT =
+  'process.stdout.write(String(process._linkedBinding("electron_browser_workbuddy_storage").loggerGet()))'
+const HELPER_SCRIPT_ARGUMENT_FLAG = '-e'
