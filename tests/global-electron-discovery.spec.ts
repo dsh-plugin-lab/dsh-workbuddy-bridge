@@ -33,19 +33,29 @@ const BOTH_INSTALLED = [
 ].join('\n')
 
 describe('Windows layout: each product has its own directory and executable', () => {
-  it('resolves the CN default at Programs\\WorkBuddy\\WorkBuddy.exe', () => {
-    vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\u\\AppData\\Local')
-    expect(defaultWorkBuddyElectronPath('windows-workbuddy', 'cn')).toBe(
-      'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddy\\WorkBuddy.exe',
-    )
-  })
+  // The literal layouts below only exist on Windows: off win32 the platform
+  // guard inside `defaultWorkBuddyElectronPath()` answers `undefined`, so the
+  // assertions would red on the ubuntu/macos CI legs. Same gating as the
+  // win32-only cases in electron-discovery.spec.ts.
+  it.skipIf(process.platform !== 'win32')(
+    'resolves the CN default at Programs\\WorkBuddy\\WorkBuddy.exe',
+    () => {
+      vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\u\\AppData\\Local')
+      expect(defaultWorkBuddyElectronPath('windows-workbuddy', 'cn')).toBe(
+        'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddy\\WorkBuddy.exe',
+      )
+    },
+  )
 
-  it('resolves the Global default at Programs\\WorkBuddyAI\\WorkBuddyAI.exe', () => {
-    vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\u\\AppData\\Local')
-    expect(defaultWorkBuddyElectronPath('windows-workbuddy', 'ai')).toBe(
-      'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddyAI\\WorkBuddyAI.exe',
-    )
-  })
+  it.skipIf(process.platform !== 'win32')(
+    'resolves the Global default at Programs\\WorkBuddyAI\\WorkBuddyAI.exe',
+    () => {
+      vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\u\\AppData\\Local')
+      expect(defaultWorkBuddyElectronPath('windows-workbuddy', 'ai')).toBe(
+        'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddyAI\\WorkBuddyAI.exe',
+      )
+    },
+  )
 
   it('defaults to the CN layout when no product is named', () => {
     vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\u\\AppData\\Local')
@@ -146,16 +156,19 @@ describe('provider: the resolved binary follows the product', () => {
     })
   }
 
-  it('reports the product-specific default for diagnostics', () => {
-    vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\u\\AppData\\Local')
-    vi.stubEnv('WORKBUDDY_ELECTRON_BIN', '')
-    expect(providerFor('cn').helperPath()).toBe(
-      'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddy\\WorkBuddy.exe',
-    )
-    expect(providerFor('ai').helperPath()).toBe(
-      'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddyAI\\WorkBuddyAI.exe',
-    )
-  })
+  it.skipIf(process.platform !== 'win32')(
+    'reports the product-specific default for diagnostics',
+    () => {
+      vi.stubEnv('LOCALAPPDATA', 'C:\\Users\\u\\AppData\\Local')
+      vi.stubEnv('WORKBUDDY_ELECTRON_BIN', '')
+      expect(providerFor('cn').helperPath()).toBe(
+        'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddy\\WorkBuddy.exe',
+      )
+      expect(providerFor('ai').helperPath()).toBe(
+        'C:\\Users\\u\\AppData\\Local\\Programs\\WorkBuddyAI\\WorkBuddyAI.exe',
+      )
+    },
+  )
 
   it('still lets an explicit path override the product default', () => {
     vi.stubEnv('WORKBUDDY_ELECTRON_BIN', 'C:\\Custom\\WorkBuddyAI.exe')
