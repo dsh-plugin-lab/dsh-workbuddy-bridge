@@ -241,16 +241,15 @@ src/
 | `X-Conversation-Request-ID` | v4 UUID |
 | `X-Conversation-Message-ID` | v4 UUID |
 
-`chatHeaders()` 经 `channelIdentityHeaders()` **每请求现生成**，与官方桌面端一致。
+`chatHeaders()` 与 `chatBase()` 使用同一地区判据 `regionOf(credential.domain)`。国际版默认逐请求生成上表五个标识，国内版默认省略这组标识。
 
-四条不能顺手改的边界：
+对于启用缓存标识复用的 HY4 聊天，适配器通过本地请求头把 DSH 会话 ID 的摘要传给 shim。shim 用实际账号 UID、企业、区域、模型和会话摘要派生稳定的 `X-Conversation-ID`。国内版只补这一个头，国际版复用这个头的值，其余四个标识仍逐请求生成。缺少会话 ID 或 UID 时沿用默认请求头。适用模型和关闭开关见 [README](../README.md#兼容与限制)。
 
-- **只有 global 注入，CN 逐字节不变**：`regionOf(credential.domain) === 'global'` 是唯一条件，同一判据 `chatBase()` 也在用。CN 现状实测 `200`，不冒进。
 - **不是在正文里找原因**：这条链路的 `11128` 与消息内容无关——干净最小请求同样被拒。反过来，`neutralizeChannelSignature()` 修不了它，别把两件事混成一条。
 - **`X-Trace-ID` 不是 UUID**，另外四个才是。独立复现（2026-10-24）显示只发三个 `X-Conversation-*` 当前也能过，但**没有据此收窄**：网关最可能收紧的正是 trace-id 格式，届时最小集又会坏掉。
 - **`probeEffort()` 共用 `chatHeaders()`**，所以这条链路修好后，国际版的推理档位探测从「静默 `unknown` / `efforts: []`」一并恢复。它是同一次修复的副作用，不是另一件事。
 
-判据在 `tests/chat-identity-wire.spec.ts`（五头形态 / 每请求不复用 / CN 无五头）。
+默认渠道身份用例核对国际版五个标识的形态、逐请求生成和国内版的默认请求头。HY4 缓存用例核对缓存标识的作用域，以及国内外两版从适配器到上游的请求头。[默认渠道身份用例](../tests/chat-identity-wire.spec.ts) · [HY4 缓存用例](../tests/cache-affinity.spec.ts)
 
 ## 失败文案：状态码会被宿主当成鉴权结论
 
@@ -273,7 +272,7 @@ src/
 - **探测记录的账号归属**：每条观测绑定产生它的账号，切换账号后旧账号的观测不消失（留在盘上）但不再被读出。
 - **默认档位必须是档位集成员**（`resolveDefaultEffort`，`src/probe/efforts.ts`）：报一个档位集之外的档位，会让每个省略档位的请求以 `UNSUPPORTED_REASONING_EFFORT` 失败——判据的"集合内兜底"（声明优先 → `high` → 集合首项）不是实现细节，是用户可感知行为的契约。
 - **`chatStream` 对两个 region 都做请求体归一化**（`src/protocol/client.ts`）：`off` 的 strip 与渠道签名中性化都住在共享层，region 只决定国际版额外补的首条 `system` 消息。改成"CN 原样透传"会让国内版重新把 `off` 与固定句发到 wire 上（issue #13 与 2026-10-21 的 `11128` 都是这个故障形态）。
-- **渠道身份头组只注入 global**（`src/protocol/client.ts` 的 `channelIdentityHeaders()`）：判据必须是 `regionOf(credential.domain) === 'global'`——与 `chatBase()` 同一个。顺手"两版统一"会让 CN 的 wire 不再逐字节等于今天实测通过的那个形态，而 CN 从没被要求带这组头。
+- **默认渠道身份头组只注入 global**（`src/protocol/client.ts` 的 `channelIdentityHeaders()`）：地区判据与 `chatBase()` 一致。
 - **错误文本里不得出现 `401` / `403`，除非失败真是鉴权类**（`src/llm/shim.ts` 的 `failureMessage()`）：宿主按文本分类，`AUTH` 会覆盖掉真实原因。判据在 `tests/shim.spec.ts`。
 - **`thinkingLevelMap.off` 保持字符串 `'off'`，`'none'` 两版透传**（`src/llm/adapter.ts` / `dropUnsupportedEffort`）：前者是选择器里 Off 档存在的唯一条件，后者是用户显式选择、不由适配层代删。
 

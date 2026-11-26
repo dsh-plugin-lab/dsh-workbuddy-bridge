@@ -6,6 +6,7 @@
  * @module dsh-workbuddy-bridge/adapter
  */
 
+import { createHash } from 'node:crypto'
 import { createProvider } from '@earendil-works/pi-ai'
 import type {
   Api,
@@ -26,7 +27,7 @@ import type { WorkBuddyCredentialStore } from '../credential/store.ts'
 import type { WorkBuddyCatalog, WorkBuddyModelInfo } from '../catalog/index.ts'
 import type { WorkBuddyProbeRecord } from '../probe/store.ts'
 import { resolveDefaultEffort, resolveEfforts } from '../probe/efforts.ts'
-import type { WorkBuddyShim } from '../llm/shim.ts'
+import { CACHE_SESSION_HEADER, type WorkBuddyShim } from '../llm/shim.ts'
 import { normalizeCredits } from '../protocol/client.ts'
 
 /** Provider route this bundle owns. */
@@ -310,6 +311,12 @@ export function createWorkBuddyAdapter(options: WorkBuddyAdapterOptions): WorkBu
     {
       profiles: () => profiles,
       auth: INERT_AUTH,
+      prepareHeaders({ sessionId }, headers) {
+        if (sessionId && process.env['WORKBUDDY_HY4_CACHE_AFFINITY'] !== '0') {
+          headers.set(CACHE_SESSION_HEADER, createHash('sha256').update(sessionId).digest('hex'))
+        }
+        return headers
+      },
       // Resolve the shim's per-process shared secret as the OpenAI apiKey so
       // pi-ai sends it as `Authorization: Bearer <shared-secret>`. The shim
       // validates this before forwarding and resolves the real WorkBuddy token

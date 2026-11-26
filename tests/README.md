@@ -5,6 +5,7 @@
 - adapter.spec.ts
 - app-version.spec.ts
 - auth.spec.ts
+- cache-affinity.spec.ts —— HY4 缓存标识的作用域，以及从 DSH 会话到上游请求头的传递
 - catalog-lifecycle.spec.ts
 - catalog-store.spec.ts
 - chat-identity-wire.spec.ts —— chat / probe 的身份头硬编码在 wire 上（UA 形态、共享头族逐字节不变），

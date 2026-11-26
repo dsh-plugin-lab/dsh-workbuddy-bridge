@@ -23,9 +23,10 @@ import type { WorkBuddyCredentialStore } from '../credential/store.ts'
 import type { WorkBuddyCatalog } from '../catalog/index.ts'
 import { hostIsLoopback, originIsLoopback } from '../llm/loopback.ts'
 import {
+  cacheConversationId,
   isChannelGateBody,
   isPlanLimitBody,
-  prepareChatBody,
+  prepareChatRequest,
   upstreamDisplayMessage,
   WorkBuddyUpstreamClient,
   type UpstreamErrorKind,
@@ -73,6 +74,9 @@ export interface WorkBuddyShimOptions {
 }
 
 const REQUEST_BODY_LIMIT = 64 * 1024 * 1024
+
+/** Opaque DSH session key on the authenticated adapter-to-shim hop only. */
+export const CACHE_SESSION_HEADER = 'x-workbuddy-cache-session'
 
 /**
  * Pull the response id and `credit` out of one SSE `data:` payload.
@@ -382,11 +386,21 @@ export function createWorkBuddyShim(options: WorkBuddyShimOptions): WorkBuddyShi
     }
 
     const raw = (await readBody(req)).toString('utf8')
-    const prepared = prepareChatBody(raw)
+    const prepared = prepareChatRequest(raw)
+    const conversationId = cacheConversationId(
+      credential,
+      prepared.model,
+      req.headers[CACHE_SESSION_HEADER],
+    )
 
     const controller = new AbortController()
     req.on('close', () => controller.abort())
-    const result = await client.chatStream(credential, prepared, controller.signal)
+    const result = await client.chatStream(
+      credential,
+      prepared.body,
+      controller.signal,
+      conversationId,
+    )
 
     if (!result.ok) {
       writeOpenAIError(res, KIND_STATUS[result.kind], result.kind, failureMessage(result))

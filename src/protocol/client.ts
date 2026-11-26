@@ -7,7 +7,7 @@
  * @module dsh-workbuddy-bridge/upstream
  */
 
-import { randomBytes } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { appUserAgent, resolveAppVersion, type AppVersionInfo } from './app-version.ts'
 import {
   chatUserAgent,
@@ -473,20 +473,52 @@ function billingHeaders(credential: WorkBuddyCredential): Record<string, string>
  * international-only scope decision, which rested on CN accepting it).
  */
 export function prepareChatBody(source: string): string {
+  return prepareChatRequest(source).body
+}
+
+/** Read the model during normalization so long transcripts need no extra JSON pass. */
+export function prepareChatRequest(source: string): { body: string; model?: string } {
   let body: unknown
   try {
     body = JSON.parse(source)
   } catch {
-    return source
+    return { body: source }
   }
-  if (typeof body !== 'object' || body === null || Array.isArray(body)) return source
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return { body: source }
   const obj = body as Record<string, unknown>
   obj['stream'] = true
   normalizeDeveloperRole(obj)
   neutralizeChannelSignature(obj)
   normalizeToolChoice(obj)
   dropUnsupportedEffort(obj)
-  return JSON.stringify(obj)
+  return {
+    body: JSON.stringify(obj),
+    ...(typeof obj['model'] === 'string' ? { model: obj['model'] } : {}),
+  }
+}
+
+/** Scope cache affinity to the account actually sending the request and the tested models (#47). */
+export function cacheConversationId(
+  credential: WorkBuddyCredential,
+  model: string | undefined,
+  sessionId: string | string[] | undefined,
+): string | undefined {
+  if (
+    process.env['WORKBUDDY_HY4_CACHE_AFFINITY'] === '0' ||
+    typeof sessionId !== 'string' ||
+    sessionId.trim() === '' ||
+    credential.uid === ''
+  )
+    return undefined
+  const region = regionOf(credential.domain)
+  if (model !== 'hy4flash-free' && model !== 'hy4std') return undefined
+  const scope = [region, credential.uid, credential.enterpriseId ?? '', model, sessionId]
+  const bytes = createHash('sha256').update(JSON.stringify(scope)).digest()
+  // Keep the existing conversation header's UUID layout. Only its lifetime changes.
+  bytes[6] = (bytes[6]! & 0x0f) | 0x40
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80
+  const hex = bytes.subarray(0, 16).toString('hex')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
 }
 
 /**
@@ -1004,6 +1036,7 @@ export class WorkBuddyUpstreamClient {
     credential: WorkBuddyCredential,
     bodyJson: string,
     signal?: AbortSignal,
+    conversationId?: string,
   ): Promise<WorkBuddyChatResult> {
     const region = regionOf(credential.domain)
     // Identity resolution must never block a message: any failure — a thrown
@@ -1020,6 +1053,7 @@ export class WorkBuddyUpstreamClient {
     const url = `${chatBase(credential)}/v2/chat/completions`
     const headers: Record<string, string> = {
       ...chatHeaders(credential, userAgent),
+      ...(conversationId === undefined ? {} : { 'X-Conversation-ID': conversationId }),
       Authorization: `Bearer ${credential.accessToken}`,
     }
     // The hook runs after headers and body are final and before the fetch, so a
