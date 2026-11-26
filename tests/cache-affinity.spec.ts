@@ -32,8 +32,10 @@ describe('HY4 conversation affinity (#47)', () => {
       cacheConversationId({ ...cn, uid: 'account-b' }, 'hy4flash-free', 'one'),
       cacheConversationId({ ...cn, enterpriseId: 'org' }, 'hy4flash-free', 'one'),
       cacheConversationId(cn, 'hy4std', 'one'),
+      cacheConversationId(cn, 'hy4flash', 'one'),
       cacheConversationId(globalAccount, 'hy4flash-free', 'one'),
       cacheConversationId(globalAccount, 'hy4std', 'one'),
+      cacheConversationId(globalAccount, 'hy4flash', 'one'),
     ]
     expect(scopes).not.toContain(undefined)
     expect(new Set(scopes).size).toBe(scopes.length)
@@ -48,8 +50,10 @@ describe('HY4 conversation affinity (#47)', () => {
 
   it.each([
     { provider: 'workbuddy', model: 'hy4std', account: cn },
+    { provider: 'workbuddy', model: 'hy4flash', account: cn },
     { provider: 'workbuddy', model: 'hy4flash-free', account: cn },
     { provider: 'workbuddy-ai', model: 'hy4std', account: globalAccount },
+    { provider: 'workbuddy-ai', model: 'hy4flash', account: globalAccount },
     { provider: 'workbuddy-ai', model: 'hy4flash-free', account: globalAccount },
   ])(
     'carries a session through the adapter and shim for $provider/$model',

@@ -141,7 +141,7 @@ Mechanism and trade-offs in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Compatibility and limits
 
-The bridge reuses a prompt cache identifier per DSH session for `hy4std` and `hy4flash-free` in both CN and Global. To disable this behavior, set `WORKBUDDY_HY4_CACHE_AFFINITY=0` before starting the host.
+The bridge reuses a prompt cache identifier per DSH session for `hy4std`, `hy4flash`, and `hy4flash-free` in both CN and Global. To disable this behavior, set `WORKBUDDY_HY4_CACHE_AFFINITY=0` before starting the host.
 
 A group without credentials does not appear. The host version floor, platform support, where the model
 catalog comes from and known gaps

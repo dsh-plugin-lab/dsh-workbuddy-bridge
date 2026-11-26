@@ -511,7 +511,7 @@ export function cacheConversationId(
   )
     return undefined
   const region = regionOf(credential.domain)
-  if (model !== 'hy4flash-free' && model !== 'hy4std') return undefined
+  if (model !== 'hy4flash' && model !== 'hy4flash-free' && model !== 'hy4std') return undefined
   const scope = [region, credential.uid, credential.enterpriseId ?? '', model, sessionId]
   const bytes = createHash('sha256').update(JSON.stringify(scope)).digest()
   // Keep the existing conversation header's UUID layout. Only its lifetime changes.

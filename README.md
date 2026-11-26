@@ -128,7 +128,7 @@ WorkBuddy 接口不保证档位信息可靠——有的模型**接受** `reasoni
 
 ## 兼容与限制
 
-国内版和国际版的 `hy4std`、`hy4flash-free` 默认按 DSH 会话复用提示词缓存标识。排障时，在启动宿主前设置 `WORKBUDDY_HY4_CACHE_AFFINITY=0` 可关闭此行为。
+国内版和国际版的 `hy4std`、`hy4flash`、`hy4flash-free` 默认按 DSH 会话复用提示词缓存标识。排障时，在启动宿主前设置 `WORKBUDDY_HY4_CACHE_AFFINITY=0` 可关闭此行为。
 
 无凭据的分组不显示。宿主版本下限、平台支持、模型清单从哪来与已知缺口
 → [docs/COMPATIBILITY.md](docs/COMPATIBILITY.md)。
